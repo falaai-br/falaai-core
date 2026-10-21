@@ -1,0 +1,11 @@
+#!/bin/sh
+# FalaAí pre-commit: verificações rápidas (formatação, lint, segredos).
+# Bloqueante. Emergência: FALAAI_SKIP_HOOKS=1 git commit ...  (o Refinery roda tudo de novo)
+set -u
+[ "${FALAAI_SKIP_HOOKS:-0}" = "1" ] && exit 0
+if ! make -s check-fast; then
+  echo "FALAAI-HOOK: FAIL gate=check-fast hook=pre-commit" >&2
+  echo "pre-commit recusou o commit. Rode 'make fmt' e 'make check-fast'." >&2
+  exit 1
+fi
+echo "FALAAI-HOOK: PASS hook=pre-commit" >&2

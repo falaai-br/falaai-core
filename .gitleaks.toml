@@ -1,0 +1,6 @@
+title = "FalaAí gitleaks"
+[extend]
+useDefault = true
+[allowlist]
+description = "Vetores de teste e textos de licença"
+paths = ['''testdata/''', '''LICENSE''', '''\.lock$''']

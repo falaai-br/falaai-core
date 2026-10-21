@@ -1,0 +1,33 @@
+[package]
+name = "falaai-core"
+version = "0.0.1"
+edition = "2024"
+license = "AGPL-3.0-only"
+description = "Núcleo criptográfico e de mensagens do FalaAí"
+publish = false
+
+[lib]
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[dependencies]
+# libsignal: dependência git pinada por commit (ADR-0001). Definida na bead da Fase 0.
+# libsignal-protocol = { git = "https://github.com/signalapp/libsignal", rev = "<COMMIT>" }
+
+[lints.rust]
+unsafe_code = "deny"
+missing_docs = "warn"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "warn"
+panic = "deny"
+dbg_macro = "deny"
+print_stdout = "deny"
+todo = "warn"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

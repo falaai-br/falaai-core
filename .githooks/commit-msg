@@ -1,0 +1,14 @@
+#!/bin/sh
+# FalaAí commit-msg: exige Conventional Commits.
+set -u
+[ "${FALAAI_SKIP_HOOKS:-0}" = "1" ] && exit 0
+first=$(sed -n '1p' "$1")
+case "$first" in
+  Merge\ *|Revert\ *|fixup!\ *|squash!\ *) exit 0 ;;
+esac
+if ! printf '%s\n' "$first" | grep -Eq '^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([a-z0-9._/-]+\))?!?: .{1,100}$'; then
+  echo "FALAAI-HOOK: FAIL gate=commit-msg" >&2
+  echo "Mensagem fora do padrão Conventional Commits: '$first'" >&2
+  echo "Exemplo: 'feat(keys): consumir one-time prekey no fetch'" >&2
+  exit 1
+fi

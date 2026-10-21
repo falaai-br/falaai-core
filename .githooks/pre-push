@@ -1,0 +1,21 @@
+#!/bin/sh
+# FalaAí pre-push: pipeline completo (lint, testes unitários, integração, segurança, build).
+# Bloqueante. É o mesmo 'make check' que o Refinery do Gas Town roda antes do merge.
+set -u
+[ "${FALAAI_SKIP_HOOKS:-0}" = "1" ] && exit 0
+# Pushes que só apagam branches não precisam de gate.
+only_deletes=1
+while read -r _lref lsha _rref _rsha; do
+  [ "$lsha" != "0000000000000000000000000000000000000000" ] && only_deletes=0
+done
+[ "$only_deletes" = "1" ] && exit 0
+if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+  echo "FALAAI-HOOK: WARN árvore com mudanças não commitadas; o gate roda sobre o diretório de trabalho." >&2
+fi
+start=$(date +%s)
+if ! make -s check; then
+  echo "FALAAI-HOOK: FAIL gate=check hook=pre-push" >&2
+  echo "pre-push recusou o push. Veja a saída acima." >&2
+  exit 1
+fi
+echo "FALAAI-HOOK: PASS hook=pre-push seconds=$(( $(date +%s) - start ))" >&2

@@ -1,0 +1,4 @@
+# Igualar à toolchain pinada pela libsignal no commit escolhido (bead da Fase 0).
+[toolchain]
+channel = "1.98.1"
+components = ["rustfmt", "clippy"]
