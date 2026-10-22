@@ -1,0 +1,4 @@
+#!/bin/sh
+# Stub de make usado por tests/hooks.rs: registra os argumentos e sai com o código pedido.
+printf '%s\n' "$*" >> "$FALAAI_TEST_MAKE_LOG"
+exit "${FALAAI_TEST_MAKE_EXIT:-0}"
