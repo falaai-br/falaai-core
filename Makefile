@@ -5,6 +5,10 @@ CARGO_DENY_VERSION  ?= 0.20.2
 CARGO_AUDIT_VERSION ?= 0.22.2
 CARGO_NDK_VERSION   ?= 4.1.2
 GITLEAKS_VERSION    ?= 8.28.0
+# Ponte com o Flutter: o codegen tem de bater com flutter_rust_bridge em Cargo.toml e
+# dart/pubspec.yaml; ele usa o cargo-expand para ler o crate.
+FRB_CODEGEN_VERSION  ?= 2.13.0
+CARGO_EXPAND_VERSION ?= 1.0.127
 
 # protoc: exigido pelo build script da libsignal (prost-build). Instalado em .tools/ com
 # checksum verificado; o caminho é fixado em .cargo/config.toml (PROTOC).
@@ -22,13 +26,14 @@ ANDROID_ABIS := arm64-v8a armeabi-v7a x86_64
 # Meta de tamanho do core por ABI Android (blueprint: APK de entrada < 40 MB por ABI).
 MOBILE_SIZE_LIMIT ?= 10485760
 
-.PHONY: tools protoc fmt lint test test-integration security build build-mobile build-android build-ios mobile-size check check-fast
+.PHONY: tools protoc fmt lint test test-integration security build build-mobile build-android build-ios mobile-size bindings bindings-check check check-fast
 tools: hooks protoc ## Instala toolchain e ferramentas pinadas e ativa os hooks
 	@command -v rustup >/dev/null || { echo "instale rustup: https://rustup.rs"; exit 1; }
 	rustup show active-toolchain
 	rustup component add rustfmt clippy
 	rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android aarch64-apple-ios aarch64-apple-ios-sim
 	cargo install --locked cargo-deny@$(CARGO_DENY_VERSION) cargo-audit@$(CARGO_AUDIT_VERSION) cargo-ndk@$(CARGO_NDK_VERSION)
+	cargo install --locked flutter_rust_bridge_codegen@$(FRB_CODEGEN_VERSION) cargo-expand@$(CARGO_EXPAND_VERSION)
 	@command -v go >/dev/null || { echo "instale Go para o gitleaks: https://go.dev/dl"; exit 1; }
 	go install github.com/zricethezav/gitleaks/v8@v$(GITLEAKS_VERSION)
 
@@ -86,6 +91,22 @@ build-ios: ## xcframework estático em dist/. Exige o Xcode completo (Command Li
 
 mobile-size: ## Tamanho dos artefatos mobile; falha se uma ABI Android passar de MOBILE_SIZE_LIMIT
 	scripts/mobile-size dist $(MOBILE_SIZE_LIMIT) $(ANDROID_ABIS)
+
+bindings: ## Regera a ponte flutter_rust_bridge (src/frb_generated.rs e dart/lib/src/rust) a partir de src/api
+	@command -v dart >/dev/null || { echo "instale o Flutter (dart no PATH): https://docs.flutter.dev/get-started"; exit 1; }
+	cd dart && dart pub get
+	@# O codegen resolve tipos pelo nome no crate inteiro: um nome repetido vira escolha ao acaso.
+	@log="$$(mktemp)"; \
+	  flutter_rust_bridge_codegen generate >"$$log" 2>&1 || { cat "$$log"; rm -f "$$log"; exit 1; }; \
+	  if grep -q "randomly pick one" "$$log"; then \
+	    grep "randomly pick one" "$$log"; rm -f "$$log"; \
+	    echo "tipo da API com nome repetido no crate: renomeie o tipo interno"; exit 1; \
+	  fi; \
+	  rm -f "$$log"
+	cargo fmt --all
+
+bindings-check: bindings ## Falha se a ponte versionada não bate com src/api
+	@test -z "$$(git status --porcelain -- src/frb_generated.rs dart/lib)" || { git status --short -- src/frb_generated.rs dart/lib; echo "ponte desatualizada: rode 'make bindings' e versione o resultado"; exit 1; }
 
 check-fast: ## pre-commit
 	cargo fmt --all -- --check

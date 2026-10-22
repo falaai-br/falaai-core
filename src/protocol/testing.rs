@@ -11,7 +11,7 @@ use libsignal_protocol::{
 };
 
 use super::signal::StoreParts;
-use super::{Address, PreKeyBundle};
+use super::{Address, PeerBundle};
 
 /// Os stores em memória e o SQLite nunca suspendem: um único poll conclui o futuro.
 pub(crate) fn ready<F: Future>(future: F) -> Result<F::Output, &'static str> {
@@ -26,7 +26,7 @@ pub(crate) fn ready<F: Future>(future: F) -> Result<F::Output, &'static str> {
 pub(crate) fn publish_bundle(
     stores: StoreParts<'_>,
     address: &Address,
-) -> Result<PreKeyBundle, Box<dyn Error>> {
+) -> Result<PeerBundle, Box<dyn Error>> {
     let rng = &mut rand::rng();
     let identity = ready(stores.identities.get_identity_key_pair())??;
     let registration_id = ready(stores.identities.get_local_registration_id())??;
@@ -65,7 +65,7 @@ pub(crate) fn publish_bundle(
         ),
     ))??;
 
-    Ok(PreKeyBundle(libsignal_protocol::PreKeyBundle::new(
+    Ok(PeerBundle(libsignal_protocol::PreKeyBundle::new(
         registration_id,
         address.0.device_id(),
         Some((1.into(), pre_key.public_key)),

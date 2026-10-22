@@ -1,0 +1,6 @@
+# flutter_rust_bridge 2.13.0 (pinado em Cargo.toml, dart/pubspec.yaml e no Makefile).
+# Regerar com 'make bindings'; o código gerado é versionado.
+rust_input: crate::api
+rust_root: .
+dart_output: dart/lib/src/rust
+dart_entrypoint_class_name: FalaaiCoreLib

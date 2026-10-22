@@ -23,6 +23,7 @@ uuid = "1.28.0"
 rusqlite = { version = "0.40.2", default-features = false, features = ["bundled-sqlcipher", "cache"] }
 thiserror = "2.0"
 zeroize = "1.8.2"
+flutter_rust_bridge = { version = "=2.13.0", default-features = false, features = ["anyhow", "dart-opaque", "rust-async", "thread-pool"] }
 
 [target.'cfg(not(target_vendor = "apple"))'.dependencies]
 rusqlite = { version = "0.40.2", default-features = false, features = ["bundled-sqlcipher-vendored-openssl"] }
@@ -33,6 +34,8 @@ tempfile = "3.27.0"
 [lints.rust]
 unsafe_code = "deny"
 missing_docs = "warn"
+# O codegen do flutter_rust_bridge expande o crate com --cfg frb_expand.
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(frb_expand)"] }
 
 [lints.clippy]
 unwrap_used = "deny"

@@ -14,12 +14,12 @@ use libsignal_protocol::{
     SenderKeyStore, SessionRecord, SessionStore, SignalProtocolError, SignedPreKeyId,
     SignedPreKeyRecord, SignedPreKeyStore,
 };
-use rusqlite::{OptionalExtension, Params, params};
+use rusqlite::{OptionalExtension, Params, TransactionBehavior, params};
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
-use super::ProtocolError;
 use super::signal::{SignalStores, StoreParts};
+use super::{Address, ProtocolError};
 use crate::storage::{Database, StorageError};
 
 type SignalResult<T> = Result<T, SignalProtocolError>;
@@ -40,8 +40,130 @@ impl SqliteStore {
         Self { db }
     }
 
-    /// Grava a identidade local, gerada no registro. Falha se já houver uma: trocar a
-    /// identidade invalida todas as sessões e não pode acontecer por engano.
+    /// Grava identidade local e pré-chaves geradas no registro, numa transação. Falha com
+    /// [`ProtocolError::AccountExists`] se já houver identidade: trocá-la invalida todas as
+    /// sessões e não pode acontecer por engano.
+    pub(crate) fn create_account(&self, account: &AccountRecords<'_>) -> Result<(), ProtocolError> {
+        let identity = Zeroizing::new(account.identity.serialize());
+        let signed_pre_key = (
+            u32::from(account.signed_pre_key.id()?),
+            Zeroizing::new(account.signed_pre_key.serialize()?),
+        );
+        let pre_keys = account
+            .pre_keys
+            .iter()
+            .map(|r| Ok((u32::from(r.id()?), Zeroizing::new(r.serialize()?))))
+            .collect::<SignalResult<Vec<_>>>()?;
+        let kyber_pre_keys = account
+            .kyber_pre_keys
+            .iter()
+            .map(|r| Ok((u32::from(r.id()?), Zeroizing::new(r.serialize()?), false)))
+            .chain([Ok((
+                u32::from(account.kyber_last_resort.id()?),
+                Zeroizing::new(account.kyber_last_resort.serialize()?),
+                true,
+            ))])
+            .collect::<SignalResult<Vec<_>>>()?;
+
+        let created = self
+            .db
+            .with(|c| {
+                let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+                if has_local_identity(&tx)? {
+                    return Ok(false);
+                }
+                tx.execute(
+                    "INSERT INTO local_identity (id, key_pair, registration_id) VALUES (1, ?1, ?2)",
+                    params![&identity[..], account.registration_id],
+                )?;
+                tx.execute(
+                    "INSERT INTO signed_pre_keys (id, record) VALUES (?1, ?2)",
+                    params![signed_pre_key.0, &signed_pre_key.1[..]],
+                )?;
+                {
+                    let mut insert =
+                        tx.prepare("INSERT INTO pre_keys (id, record) VALUES (?1, ?2)")?;
+                    for (id, record) in &pre_keys {
+                        insert.execute(params![id, &record[..]])?;
+                    }
+                    let mut insert = tx.prepare(
+                        "INSERT INTO kyber_pre_keys (id, record, last_resort) VALUES (?1, ?2, ?3)",
+                    )?;
+                    for (id, record, last_resort) in &kyber_pre_keys {
+                        insert.execute(params![id, &record[..], last_resort])?;
+                    }
+                }
+                tx.commit()?;
+                Ok(true)
+            })
+            .map_err(|_| ProtocolError::Storage)?;
+        if created {
+            Ok(())
+        } else {
+            Err(ProtocolError::AccountExists)
+        }
+    }
+
+    /// Endereço deste dispositivo, se o registro já o gravou.
+    pub(crate) fn local_address(&self) -> Result<Option<Address>, ProtocolError> {
+        self.db
+            .with(|c| {
+                c.query_row("SELECT aci, device_id FROM local_address", [], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, u8>(1)?))
+                })
+                .optional()
+            })
+            .map_err(|_| ProtocolError::Storage)?
+            .map(|(aci, device_id)| Address::new(&aci, device_id))
+            .transpose()
+    }
+
+    /// Grava o endereço que o servidor atribuiu a este dispositivo no registro. Exige as chaves
+    /// da conta ([`ProtocolError::NoAccount`]). Gravar de novo o mesmo endereço não muda nada;
+    /// um diferente falha com [`ProtocolError::AccountExists`].
+    pub(crate) fn set_local_address(&self, address: &Address) -> Result<(), ProtocolError> {
+        enum Outcome {
+            Saved,
+            NoAccount,
+            Conflict,
+        }
+        let (aci, device_id) = (address.0.name(), u8::from(address.0.device_id()));
+        let outcome = self
+            .db
+            .with(|c| {
+                let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+                if !has_local_identity(&tx)? {
+                    return Ok(Outcome::NoAccount);
+                }
+                let current: Option<(String, u8)> = tx
+                    .query_row("SELECT aci, device_id FROM local_address", [], |row| {
+                        Ok((row.get(0)?, row.get(1)?))
+                    })
+                    .optional()?;
+                let outcome = match current {
+                    None => {
+                        tx.execute(
+                            "INSERT INTO local_address (id, aci, device_id) VALUES (1, ?1, ?2)",
+                            params![aci, device_id],
+                        )?;
+                        Outcome::Saved
+                    }
+                    Some(current) if current == (aci.to_owned(), device_id) => Outcome::Saved,
+                    Some(_) => Outcome::Conflict,
+                };
+                tx.commit()?;
+                Ok(outcome)
+            })
+            .map_err(|_| ProtocolError::Storage)?;
+        match outcome {
+            Outcome::Saved => Ok(()),
+            Outcome::NoAccount => Err(ProtocolError::NoAccount),
+            Outcome::Conflict => Err(ProtocolError::AccountExists),
+        }
+    }
+
+    /// Grava só a identidade local, sem pré-chaves.
+    #[cfg(test)]
     pub(crate) fn create_local_identity(
         &self,
         key_pair: &IdentityKeyPair,
@@ -61,6 +183,13 @@ impl SqliteStore {
 
     /// Guarda uma pré-chave Kyber de último recurso: sobrevive ao uso, mas cada combinação de
     /// pré-chaves e base key só é aceita uma vez.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "rotação da Kyber de último recurso; no registro ela entra por create_account"
+        )
+    )]
     pub(crate) fn save_last_resort_kyber_pre_key(
         &self,
         id: KyberPreKeyId,
@@ -100,6 +229,22 @@ impl SqliteStore {
             .map_err(SignalProtocolError::for_application_callback(method))?;
         Ok(())
     }
+}
+
+/// Registros gerados no registro da conta, gravados juntos por [`SqliteStore::create_account`].
+pub(crate) struct AccountRecords<'a> {
+    pub(crate) identity: &'a IdentityKeyPair,
+    pub(crate) registration_id: u32,
+    pub(crate) signed_pre_key: &'a SignedPreKeyRecord,
+    pub(crate) pre_keys: &'a [PreKeyRecord],
+    pub(crate) kyber_pre_keys: &'a [KyberPreKeyRecord],
+    pub(crate) kyber_last_resort: &'a KyberPreKeyRecord,
+}
+
+fn has_local_identity(c: &rusqlite::Connection) -> rusqlite::Result<bool> {
+    c.query_row("SELECT EXISTS (SELECT 1 FROM local_identity)", [], |row| {
+        row.get(0)
+    })
 }
 
 fn device_id(address: &ProtocolAddress) -> u32 {
@@ -438,7 +583,7 @@ mod tests {
     use super::*;
     use crate::protocol::signal::LibsignalSessions;
     use crate::protocol::testing::{self, ready};
-    use crate::protocol::{Address, Envelope, EnvelopeKind, Sessions};
+    use crate::protocol::{Address, Ciphertext, CiphertextKind, Sessions};
     use crate::storage::DatabaseKey;
 
     type TestResult = Result<(), Box<dyn Error>>;
@@ -726,14 +871,14 @@ mod tests {
             SqliteStore::new(self.db.clone())
         }
 
-        fn encrypt(&mut self, to: &Device, plaintext: &[u8]) -> Result<Envelope, Box<dyn Error>> {
+        fn encrypt(&mut self, to: &Device, plaintext: &[u8]) -> Result<Ciphertext, Box<dyn Error>> {
             Ok(ready(self.sessions.encrypt(&to.address, plaintext))??)
         }
 
         fn decrypt(
             &mut self,
             from: &Device,
-            envelope: &Envelope,
+            envelope: &Ciphertext,
         ) -> Result<Result<Vec<u8>, ProtocolError>, Box<dyn Error>> {
             Ok(ready(self.sessions.decrypt(&from.address, envelope))?.map(|p| p.to_vec()))
         }
@@ -749,7 +894,7 @@ mod tests {
 
         ready(alice.sessions.start_session(&bob.address, &bundle))??;
         let first = alice.encrypt(&bob, b"oi, bob")?;
-        assert_eq!(first.kind(), EnvelopeKind::PreKey);
+        assert_eq!(first.kind(), CiphertextKind::PreKey);
 
         bob.reopen()?;
         assert_eq!(bob.decrypt(&alice, &first)??, b"oi, bob");
@@ -763,7 +908,7 @@ mod tests {
         assert_eq!(alice.decrypt(&bob, &reply)??, b"oi, alice");
 
         let next = alice.encrypt(&bob, b"tudo bem?")?;
-        assert_eq!(next.kind(), EnvelopeKind::Message);
+        assert_eq!(next.kind(), CiphertextKind::Message);
         bob.reopen()?;
         assert_eq!(bob.decrypt(&alice, &next)??, b"tudo bem?");
         assert!(bob.decrypt(&alice, &first)?.is_err(), "replay do PQXDH");
