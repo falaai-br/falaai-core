@@ -1,0 +1,40 @@
+#!/bin/sh
+# Mede os artefatos de 'make build-mobile' e falha se a .so de alguma ABI Android passar do
+# limite (meta do core: < 10 MB) ou estiver ausente. As .a do xcframework são só informativas:
+# são estáticas e o tamanho final depende do link do app.
+# Uso: scripts/mobile-size <dist> <limite em bytes> <abi>...
+set -eu
+[ "$#" -ge 3 ] || { echo "uso: $0 <dist> <limite em bytes> <abi>..." >&2; exit 2; }
+dist=$1
+limit=$2
+shift 2
+
+mb() { awk -v b="$1" 'BEGIN { printf "%.2f MB", b / 1048576 }'; }
+
+failed=0
+for abi in "$@"; do
+  so="$dist/android/$abi/libfalaai_core.so"
+  if [ ! -f "$so" ]; then
+    echo "FALAAI-SIZE: FAIL abi=$abi ausente ($so); rode 'make build-android'" >&2
+    failed=1
+    continue
+  fi
+  bytes=$(wc -c < "$so" | tr -d ' ')
+  echo "android $abi $bytes bytes ($(mb "$bytes"))"
+  if [ "$bytes" -gt "$limit" ]; then
+    echo "FALAAI-SIZE: FAIL abi=$abi bytes=$bytes limite=$limit" >&2
+    failed=1
+  fi
+done
+
+if [ -d "$dist/FalaaiCore.xcframework" ]; then
+  for lib in "$dist"/FalaaiCore.xcframework/*/libfalaai_core.a; do
+    [ -f "$lib" ] || continue
+    bytes=$(wc -c < "$lib" | tr -d ' ')
+    slice=$(basename "$(dirname "$lib")")
+    echo "ios $slice $bytes bytes ($(mb "$bytes"), estática)"
+  done
+fi
+
+[ "$failed" = "0" ] || exit 1
+echo "FALAAI-SIZE: PASS limite=$limit"

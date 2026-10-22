@@ -18,7 +18,11 @@ PROTOC_OS   := $(subst Darwin,osx,$(subst Linux,linux,$(shell uname -s)))
 PROTOC_ARCH := $(subst arm64,aarch_64,$(subst aarch64,aarch_64,$(shell uname -m)))
 PROTOC_PLATFORM := $(PROTOC_OS)-$(PROTOC_ARCH)
 
-.PHONY: tools protoc fmt lint test test-integration security build build-mobile check check-fast
+ANDROID_ABIS := arm64-v8a armeabi-v7a x86_64
+# Meta de tamanho do core por ABI Android (blueprint: APK de entrada < 40 MB por ABI).
+MOBILE_SIZE_LIMIT ?= 10485760
+
+.PHONY: tools protoc fmt lint test test-integration security build build-mobile build-android build-ios mobile-size check check-fast
 tools: hooks protoc ## Instala toolchain e ferramentas pinadas e ativa os hooks
 	@command -v rustup >/dev/null || { echo "instale rustup: https://rustup.rs"; exit 1; }
 	rustup show active-toolchain
@@ -64,8 +68,14 @@ security: ## cargo-deny (licenças, advisories, fontes), cargo-audit, gitleaks
 build: ## Build de release do host
 	cargo build --release --locked
 
-build-mobile: ## Android (3 ABIs) e iOS (xcframework). Fora do hook; usado nas beads de build
-	cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 -o dist/android build --release --locked
+build-mobile: build-android build-ios mobile-size ## Android (3 ABIs) e iOS (xcframework). Fora do hook; usado nas beads de build
+
+build-android: ## .so por ABI em dist/android/. Exige o NDK (ANDROID_NDK_HOME ou ANDROID_HOME/ndk)
+	cargo ndk $(addprefix -t ,$(ANDROID_ABIS)) -o dist/android build --release --locked
+
+build-ios: ## xcframework estático em dist/. Exige o Xcode completo (Command Line Tools não têm o SDK iOS)
+	@xcrun --sdk iphoneos --show-sdk-path >/dev/null 2>&1 || { \
+	  echo "SDK iphoneos não encontrado: instale o Xcode e selecione-o com 'xcode-select -s' ou DEVELOPER_DIR"; exit 1; }
 	cargo build --release --locked --target aarch64-apple-ios
 	cargo build --release --locked --target aarch64-apple-ios-sim
 	rm -rf dist/FalaaiCore.xcframework
@@ -73,6 +83,9 @@ build-mobile: ## Android (3 ABIs) e iOS (xcframework). Fora do hook; usado nas b
 	  -library target/aarch64-apple-ios/release/libfalaai_core.a \
 	  -library target/aarch64-apple-ios-sim/release/libfalaai_core.a \
 	  -output dist/FalaaiCore.xcframework
+
+mobile-size: ## Tamanho dos artefatos mobile; falha se uma ABI Android passar de MOBILE_SIZE_LIMIT
+	scripts/mobile-size dist $(MOBILE_SIZE_LIMIT) $(ANDROID_ABIS)
 
 check-fast: ## pre-commit
 	cargo fmt --all -- --check
