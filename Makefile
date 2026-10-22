@@ -26,7 +26,7 @@ ANDROID_ABIS := arm64-v8a armeabi-v7a x86_64
 # Meta de tamanho do core por ABI Android (blueprint: APK de entrada < 40 MB por ABI).
 MOBILE_SIZE_LIMIT ?= 10485760
 
-.PHONY: tools protoc fmt lint test test-integration security build build-mobile build-android build-ios mobile-size bindings bindings-check check check-fast
+.PHONY: tools protoc fmt lint test test-integration vectors security build build-mobile build-android build-ios mobile-size bindings bindings-check check check-fast
 tools: hooks protoc ## Instala toolchain e ferramentas pinadas e ativa os hooks
 	@command -v rustup >/dev/null || { echo "instale rustup: https://rustup.rs"; exit 1; }
 	rustup show active-toolchain
@@ -64,6 +64,9 @@ test: ## Testes unitários
 
 test-integration: ## Testes de integração (dois cores trocando mensagens, SQLCipher real)
 	cargo test --test '*' --locked
+
+vectors: ## Regera os vetores de envelope em vectors/envelope/; revise o diff antes de versionar
+	FALAAI_UPDATE_VECTORS=1 cargo test --test envelope_vectors --locked
 
 security: ## cargo-deny (licenças, advisories, fontes), cargo-audit, gitleaks
 	cargo deny --locked check

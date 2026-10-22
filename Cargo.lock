@@ -560,10 +560,14 @@ name = "falaai-core"
 version = "0.0.1"
 dependencies = [
  "async-trait",
+ "falaai-core",
  "flutter_rust_bridge",
  "libsignal-protocol",
+ "prost",
  "rand 0.9.5",
  "rusqlite",
+ "serde_json",
+ "sha2",
  "tempfile",
  "thiserror",
  "uuid",

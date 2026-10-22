@@ -130,6 +130,15 @@ impl FalaaiCore {
         self.subscribe(Box::new(move |event| sink.add(event).is_ok()));
     }
 
+    /// Como [`Self::events`], mas entrega a uma closure Rust: os testes de integração em `tests/`
+    /// não têm como criar um `StreamSink` sem o Dart. `deliver` devolve `false` quando o
+    /// assinante fechou. Só existe com a feature `test-support` e fica fora da ponte.
+    #[cfg(feature = "test-support")]
+    #[frb(ignore)]
+    pub fn subscribe_events(&self, deliver: impl Fn(ChatEvent) -> bool + Send + 'static) {
+        self.subscribe(Box::new(deliver));
+    }
+
     fn subscribe(&self, deliver: Deliver) {
         *lock(&self.events) = Some(deliver);
     }

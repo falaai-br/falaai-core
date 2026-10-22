@@ -1,0 +1,114 @@
+{
+  "cases": [
+    {
+      "ciphertext_kind": "prekey",
+      "ciphertext_version": 68,
+      "client_message_id": "00000000000040008000000000000001",
+      "content_format": "libsignal-ciphertext",
+      "description": "Primeira mensagem da sessão: carrega o material do PQXDH",
+      "destination_aci": "b0b0b0b0-0000-4000-8000-000000000000",
+      "destination_device_id": 1,
+      "envelope_type": "ENVELOPE_TYPE_MESSAGE",
+      "files": {
+        "deliver": {
+          "path": "prekey.deliver.bin",
+          "sha256": "20a1ad6ee2fd20befe9ad1f42896f736d3b515db8ea0f5a8fc02b2780707174e"
+        },
+        "envelope": {
+          "path": "prekey.envelope.bin",
+          "sha256": "bff7b4259c69834c2a61f5acd7fdce93aa67645decd04043cae96fea242834e6"
+        },
+        "send": {
+          "path": "prekey.send.bin",
+          "sha256": "71fa91f0e0dc250708831d7a13153683f97db2dd2c94c15b4905ab2094769a19"
+        }
+      },
+      "name": "prekey",
+      "seq": 1,
+      "server_timestamp": 1767225600000
+    },
+    {
+      "ciphertext_kind": "message",
+      "ciphertext_version": 68,
+      "client_message_id": "00000000000040008000000000000002",
+      "content_format": "libsignal-ciphertext",
+      "description": "Mensagem de conversa numa sessão confirmada",
+      "destination_aci": "b0b0b0b0-0000-4000-8000-000000000000",
+      "destination_device_id": 1,
+      "envelope_type": "ENVELOPE_TYPE_MESSAGE",
+      "files": {
+        "deliver": {
+          "path": "message.deliver.bin",
+          "sha256": "429cd6cba1a0933a89b126766272761b1e99c25a70a379a2540bece9adc0723e"
+        },
+        "envelope": {
+          "path": "message.envelope.bin",
+          "sha256": "08e7b151500f39abf983c93f24960c92940f611c6d2c23ea0bf898f4e899b97f"
+        },
+        "send": {
+          "path": "message.send.bin",
+          "sha256": "429b5364e3fe9e444eb35b20eb0fefd828f93d2357ccb97481cb6900dc078426"
+        }
+      },
+      "name": "message",
+      "seq": 2,
+      "server_timestamp": 1767225600000
+    },
+    {
+      "ciphertext_kind": "message",
+      "ciphertext_version": 68,
+      "client_message_id": "00000000000040008000000000000003",
+      "content_format": "libsignal-ciphertext",
+      "description": "Recibo de leitura",
+      "destination_aci": "b0b0b0b0-0000-4000-8000-000000000000",
+      "destination_device_id": 1,
+      "envelope_type": "ENVELOPE_TYPE_RECEIPT",
+      "files": {
+        "deliver": {
+          "path": "receipt.deliver.bin",
+          "sha256": "31e696842018190ff718bb9c5552e59743f67772bb92f407e56f4cd3968c0a28"
+        },
+        "envelope": {
+          "path": "receipt.envelope.bin",
+          "sha256": "fad54b247bf141ab30e8271c0c4abb81c258fda07d5cb3445fb766bad7c32479"
+        },
+        "send": {
+          "path": "receipt.send.bin",
+          "sha256": "0845f230ce98ffe164d8f3db2613f9f1d91d629a7475a2dcad15316d4f1072f3"
+        }
+      },
+      "name": "receipt",
+      "seq": 3,
+      "server_timestamp": 1767225600000
+    },
+    {
+      "ciphertext_kind": "message",
+      "ciphertext_version": 68,
+      "client_message_id": "00000000000040008000000000000004",
+      "content_format": "libsignal-ciphertext",
+      "description": "Sinalização de chamada (oferta SDP)",
+      "destination_aci": "b0b0b0b0-0000-4000-8000-000000000000",
+      "destination_device_id": 1,
+      "envelope_type": "ENVELOPE_TYPE_CALL_SIGNAL",
+      "files": {
+        "deliver": {
+          "path": "call_signal.deliver.bin",
+          "sha256": "e72bc963b93da1ee762fce8a21a681f665b965cdaa31dcd070b231efea5da569"
+        },
+        "envelope": {
+          "path": "call_signal.envelope.bin",
+          "sha256": "c721fcf91b77a12531ff572625b5d0ee20b6be45b85c28231b8dcbcf4e8275f8"
+        },
+        "send": {
+          "path": "call_signal.send.bin",
+          "sha256": "7af73c88f4a6e4ac1dee61c226330b4dc8ebbb21437bd408d437e0b0a76f32ec"
+        }
+      },
+      "name": "call_signal",
+      "seq": 4,
+      "server_timestamp": 1767225600000
+    }
+  ],
+  "description": "Vetores de envelope do falaai-core para os testes de contrato do servidor. Ver README.md.",
+  "proto": "github.com/falaai-br/falaai-proto@57fa36c proto/falaai/v1"
+}
