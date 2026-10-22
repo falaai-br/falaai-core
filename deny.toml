@@ -4,6 +4,11 @@ all-features = true
 [advisories]
 version = 2
 yanked = "deny"
+ignore = [
+  # proc-macro de build (sem código em runtime) puxado pela libsignal: libcrux-ml-kem -> hax-lib.
+  # Sem versão corrigida e sem como trocar sem fork (ADR-0001). Remover quando a libsignal migrar.
+  { id = "RUSTSEC-2026-0173", reason = "proc-macro-error2 sem manutenção; transitivo da libsignal, só em build" },
+]
 
 [licenses]
 version = 2

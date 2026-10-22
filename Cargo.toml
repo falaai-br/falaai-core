@@ -10,8 +10,13 @@ publish = false
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [dependencies]
-# libsignal: dependência git pinada por commit (ADR-0001). Definida na bead da Fase 0.
-# libsignal-protocol = { git = "https://github.com/signalapp/libsignal", rev = "<COMMIT>" }
+# libsignal: dependência git pinada por commit (ADR-0001). Commit da tag v0.105.4.
+# Ao atualizar, igualar rust-toolchain.toml ao arquivo rust-toolchain da libsignal nesse commit.
+libsignal-protocol = { git = "https://github.com/signalapp/libsignal", rev = "b2a5c30f3245c1bcad04b27b1e752a38321c793d" }
+# Mesmas séries da libsignal no commit pinado (rand precisa coincidir para os traits de RNG).
+rand = "0.9.4"
+thiserror = "2.0"
+zeroize = "1.8.2"
 
 [lints.rust]
 unsafe_code = "deny"
@@ -26,8 +31,20 @@ print_stdout = "deny"
 todo = "warn"
 
 [profile.release]
+# A libsignal compila em release com overflow-checks, exceto nos crates de primitivas abaixo.
+# Perfis de dependências não se propagam; replicamos aqui.
+overflow-checks = true
 opt-level = "z"
 lto = true
 codegen-units = 1
 panic = "abort"
 strip = true
+
+[profile.release.package.curve25519-dalek]
+overflow-checks = false
+
+[profile.release.package.sha2]
+overflow-checks = false
+
+[profile.release.package.hmac]
+overflow-checks = false
