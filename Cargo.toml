@@ -13,10 +13,22 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 # libsignal: dependência git pinada por commit (ADR-0001). Commit da tag v0.105.4.
 # Ao atualizar, igualar rust-toolchain.toml ao arquivo rust-toolchain da libsignal nesse commit.
 libsignal-protocol = { git = "https://github.com/signalapp/libsignal", rev = "b2a5c30f3245c1bcad04b27b1e752a38321c793d" }
-# Mesmas séries da libsignal no commit pinado (rand precisa coincidir para os traits de RNG).
+# Mesmas séries da libsignal no commit pinado (rand precisa coincidir para os traits de RNG;
+# async-trait e uuid aparecem nas assinaturas dos stores).
+async-trait = "0.1.92"
 rand = "0.9.4"
+uuid = "1.28.0"
+# SQLCipher compilado junto. Nas plataformas Apple usa CommonCrypto; nas demais, OpenSSL
+# vendorizado (abaixo). A libsignal não usa OpenSSL, então não há conflito de símbolos.
+rusqlite = { version = "0.40.2", default-features = false, features = ["bundled-sqlcipher", "cache"] }
 thiserror = "2.0"
 zeroize = "1.8.2"
+
+[target.'cfg(not(target_vendor = "apple"))'.dependencies]
+rusqlite = { version = "0.40.2", default-features = false, features = ["bundled-sqlcipher-vendored-openssl"] }
+
+[dev-dependencies]
+tempfile = "3.27.0"
 
 [lints.rust]
 unsafe_code = "deny"

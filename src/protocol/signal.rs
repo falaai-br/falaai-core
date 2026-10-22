@@ -118,16 +118,11 @@ impl<S: SignalStores> Sessions for LibsignalSessions<S> {
 #[cfg(test)]
 mod tests {
     use std::error::Error;
-    use std::future::Future;
-    use std::pin::pin;
-    use std::task::{Context, Poll, Waker};
 
-    use libsignal_protocol::{
-        Aci, GenericSignedPreKey, IdentityKeyPair, InMemSignalProtocolStore, KeyPair,
-        KyberPreKeyRecord, PreKeyRecord, SignedPreKeyRecord, Timestamp, kem,
-    };
+    use libsignal_protocol::{Aci, IdentityKeyPair, InMemSignalProtocolStore};
 
     use super::*;
+    use crate::protocol::testing::{self, ready};
 
     type TestResult = Result<(), Box<dyn Error>>;
 
@@ -140,14 +135,6 @@ mod tests {
                 signed_pre_keys: &mut self.signed_pre_key_store,
                 kyber_pre_keys: &mut self.kyber_pre_key_store,
             }
-        }
-    }
-
-    /// Os stores em memória nunca suspendem: um único poll conclui o futuro.
-    fn ready<F: Future>(future: F) -> Result<F::Output, &'static str> {
-        match pin!(future).poll(&mut Context::from_waker(Waker::noop())) {
-            Poll::Ready(output) => Ok(output),
-            Poll::Pending => Err("futuro pendente com stores em memória"),
         }
     }
 
@@ -168,60 +155,8 @@ mod tests {
             })
         }
 
-        /// Gera pré-chaves (EC descartável, EC assinada e Kyber), guarda as privadas no
-        /// store e devolve o bundle público, como seria publicado no servidor.
         fn publish_bundle(&mut self) -> Result<PreKeyBundle, Box<dyn Error>> {
-            let rng = &mut rand::rng();
-            let store = &mut self.sessions.stores;
-            let identity = ready(store.identity_store.get_identity_key_pair())??;
-            let registration_id = ready(store.identity_store.get_local_registration_id())??;
-
-            let pre_key = KeyPair::generate(rng);
-            let signed = KeyPair::generate(rng);
-            let signed_signature = identity
-                .private_key()
-                .calculate_signature(&signed.public_key.serialize(), rng)?;
-            let kyber = kem::KeyPair::generate(kem::KeyType::Kyber1024, rng);
-            let kyber_signature = identity
-                .private_key()
-                .calculate_signature(&kyber.public_key.serialize(), rng)?;
-
-            ready(
-                store
-                    .pre_key_store
-                    .save_pre_key(1.into(), &PreKeyRecord::new(1.into(), &pre_key)),
-            )??;
-            ready(store.signed_pre_key_store.save_signed_pre_key(
-                1.into(),
-                &SignedPreKeyRecord::new(
-                    1.into(),
-                    Timestamp::from_epoch_millis(0),
-                    &signed,
-                    &signed_signature,
-                ),
-            ))??;
-            ready(store.kyber_pre_key_store.save_kyber_pre_key(
-                1.into(),
-                &KyberPreKeyRecord::new(
-                    1.into(),
-                    Timestamp::from_epoch_millis(0),
-                    &kyber,
-                    &kyber_signature,
-                ),
-            ))??;
-
-            Ok(PreKeyBundle(libsignal_protocol::PreKeyBundle::new(
-                registration_id,
-                self.address.0.device_id(),
-                Some((1.into(), pre_key.public_key)),
-                1.into(),
-                signed.public_key,
-                signed_signature.to_vec(),
-                1.into(),
-                kyber.public_key,
-                kyber_signature.to_vec(),
-                *identity.identity_key(),
-            )?))
+            testing::publish_bundle(self.sessions.stores.parts(), &self.address)
         }
 
         fn encrypt(&mut self, to: &Device, plaintext: &[u8]) -> Result<Envelope, Box<dyn Error>> {
