@@ -14,6 +14,8 @@ allow = [
   "ISC", "Unicode-3.0", "Zlib", "CC0-1.0", "MPL-2.0", "BSL-1.0",
 ]
 confidence-threshold = 0.9
+# As listas já preveem as dependências da libsignal; não avisar enquanto ela não entra.
+unused-allowed-license = "allow"
 
 [bans]
 multiple-versions = "warn"
@@ -23,4 +25,5 @@ allow-wildcard-paths = true
 [sources]
 unknown-registry = "deny"
 unknown-git = "deny"
+unused-allowed-source = "allow"
 allow-git = ["https://github.com/signalapp/libsignal", "https://github.com/signalapp/SparsePostQuantumRatchet", "https://github.com/signalapp/boring", "https://github.com/signalapp/curve25519-dalek"]

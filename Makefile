@@ -4,7 +4,7 @@ include mk/hooks.mk
 CARGO_DENY_VERSION  ?= 0.20.2
 CARGO_AUDIT_VERSION ?= 0.22.2
 CARGO_NDK_VERSION   ?= 4.1.2
-GITLEAKS ?= $(shell command -v gitleaks || echo $(HOME)/go/bin/gitleaks)
+GITLEAKS_VERSION    ?= 8.28.0
 
 .PHONY: tools fmt lint test test-integration security build build-mobile check check-fast
 tools: hooks ## Instala toolchain e ferramentas pinadas e ativa os hooks
@@ -13,6 +13,8 @@ tools: hooks ## Instala toolchain e ferramentas pinadas e ativa os hooks
 	rustup component add rustfmt clippy
 	rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android aarch64-apple-ios aarch64-apple-ios-sim
 	cargo install --locked cargo-deny@$(CARGO_DENY_VERSION) cargo-audit@$(CARGO_AUDIT_VERSION) cargo-ndk@$(CARGO_NDK_VERSION)
+	@command -v go >/dev/null || { echo "instale Go para o gitleaks: https://go.dev/dl"; exit 1; }
+	go install github.com/zricethezav/gitleaks/v8@v$(GITLEAKS_VERSION)
 
 fmt: ## Formata
 	cargo fmt --all
