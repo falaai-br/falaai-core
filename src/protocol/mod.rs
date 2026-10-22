@@ -2,10 +2,14 @@
 //!
 //! Único módulo do crate que importa `libsignal_protocol`. O restante do core depende só da
 //! trait [`Sessions`] e dos tipos daqui, que não expõem tipos da libsignal; o storage entra
-//! pela trait [`signal::SignalStores`]. Um upgrade da libsignal que quebre a API fica contido aqui.
+//! pela trait [`signal::SignalStores`], implementada sobre o banco local em [`store`]. Um
+//! upgrade da libsignal que quebre a API fica contido aqui.
 
 mod error;
 pub(crate) mod signal;
+pub(crate) mod store;
+#[cfg(test)]
+mod testing;
 
 use std::fmt;
 
