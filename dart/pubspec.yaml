@@ -1,0 +1,14 @@
+name: falaai_core
+description: Bindings Dart do falaai-core, gerados pelo flutter_rust_bridge.
+publish_to: none
+version: 0.0.1
+
+environment:
+  sdk: ^3.9.0
+
+dependencies:
+  flutter_rust_bridge: 2.13.0
+  freezed_annotation: ^3.1.0
+dev_dependencies:
+  freezed: ^3.2.5
+  build_runner: ^2.15.1

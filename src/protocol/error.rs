@@ -24,6 +24,12 @@ pub(crate) enum ProtocolError {
     /// Chave, assinatura ou acordo de chaves inválido.
     #[error("chave inválida")]
     InvalidKey,
+    /// As chaves da conta já foram geradas, ou o endereço local já é outro.
+    #[error("conta já criada")]
+    AccountExists,
+    /// Ainda não há chaves da conta, ou falta o endereço local.
+    #[error("conta não criada")]
+    NoAccount,
     /// Falha devolvida por um store.
     #[error("falha no armazenamento do protocolo")]
     Storage,

@@ -60,4 +60,12 @@ pub(super) const MIGRATIONS: &[&str] = &[
         PRIMARY KEY (name, device_id, distribution_id)
     ) STRICT;
     ",
+    // 2: endereço do próprio dispositivo, atribuído pelo servidor depois do registro.
+    "
+    CREATE TABLE local_address (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        aci TEXT NOT NULL,
+        device_id INTEGER NOT NULL
+    ) STRICT;
+    ",
 ];

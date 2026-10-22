@@ -9,7 +9,7 @@ use libsignal_protocol::{
 };
 use zeroize::Zeroizing;
 
-use super::{Address, Envelope, EnvelopeKind, Plaintext, PreKeyBundle, ProtocolError, Sessions};
+use super::{Address, Ciphertext, CiphertextKind, PeerBundle, Plaintext, ProtocolError, Sessions};
 
 /// Stores da libsignal emprestados juntos: as operações de sessão usam vários ao mesmo tempo.
 pub(crate) struct StoreParts<'a> {
@@ -43,7 +43,7 @@ impl<S: SignalStores> Sessions for LibsignalSessions<S> {
     async fn start_session(
         &mut self,
         peer: &Address,
-        bundle: &PreKeyBundle,
+        bundle: &PeerBundle,
     ) -> Result<(), ProtocolError> {
         let stores = self.stores.parts();
         process_prekey_bundle(
@@ -63,7 +63,7 @@ impl<S: SignalStores> Sessions for LibsignalSessions<S> {
         &mut self,
         peer: &Address,
         plaintext: &[u8],
-    ) -> Result<Envelope, ProtocolError> {
+    ) -> Result<Ciphertext, ProtocolError> {
         let stores = self.stores.parts();
         let message = message_encrypt(
             plaintext,
@@ -76,25 +76,25 @@ impl<S: SignalStores> Sessions for LibsignalSessions<S> {
         )
         .await?;
         let kind = match message.message_type() {
-            CiphertextMessageType::PreKey => EnvelopeKind::PreKey,
-            CiphertextMessageType::Whisper => EnvelopeKind::Message,
+            CiphertextMessageType::PreKey => CiphertextKind::PreKey,
+            CiphertextMessageType::Whisper => CiphertextKind::Message,
             CiphertextMessageType::SenderKey | CiphertextMessageType::Plaintext => {
                 return Err(ProtocolError::Internal);
             }
         };
-        Ok(Envelope::new(kind, message.serialize().to_vec()))
+        Ok(Ciphertext::new(kind, message.serialize().to_vec()))
     }
 
     async fn decrypt(
         &mut self,
         peer: &Address,
-        envelope: &Envelope,
+        envelope: &Ciphertext,
     ) -> Result<Plaintext, ProtocolError> {
         let message = match envelope.kind() {
-            EnvelopeKind::PreKey => CiphertextMessage::PreKeySignalMessage(
+            CiphertextKind::PreKey => CiphertextMessage::PreKeySignalMessage(
                 PreKeySignalMessage::try_from(envelope.body())?,
             ),
-            EnvelopeKind::Message => {
+            CiphertextKind::Message => {
                 CiphertextMessage::SignalMessage(SignalMessage::try_from(envelope.body())?)
             }
         };
@@ -155,25 +155,25 @@ mod tests {
             })
         }
 
-        fn publish_bundle(&mut self) -> Result<PreKeyBundle, Box<dyn Error>> {
+        fn publish_bundle(&mut self) -> Result<PeerBundle, Box<dyn Error>> {
             testing::publish_bundle(self.sessions.stores.parts(), &self.address)
         }
 
-        fn encrypt(&mut self, to: &Device, plaintext: &[u8]) -> Result<Envelope, Box<dyn Error>> {
+        fn encrypt(&mut self, to: &Device, plaintext: &[u8]) -> Result<Ciphertext, Box<dyn Error>> {
             Ok(ready(self.sessions.encrypt(&to.address, plaintext))??)
         }
 
         fn decrypt(
             &mut self,
             from: &Device,
-            envelope: &Envelope,
+            envelope: &Ciphertext,
         ) -> Result<Result<Plaintext, ProtocolError>, Box<dyn Error>> {
             Ok(ready(self.sessions.decrypt(&from.address, envelope))?)
         }
     }
 
     /// Alice abre sessão com o bundle de Bob e manda a primeira mensagem.
-    fn alice_and_bob() -> Result<(Device, Device, Envelope), Box<dyn Error>> {
+    fn alice_and_bob() -> Result<(Device, Device, Ciphertext), Box<dyn Error>> {
         let mut alice = Device::new(0xA1)?;
         let mut bob = Device::new(0xB0)?;
         let bundle = bob.publish_bundle()?;
@@ -185,17 +185,17 @@ mod tests {
     #[test]
     fn pqxdh_abre_sessao_e_troca_mensagens_nos_dois_sentidos() -> TestResult {
         let (mut alice, mut bob, first) = alice_and_bob()?;
-        assert_eq!(first.kind(), EnvelopeKind::PreKey);
+        assert_eq!(first.kind(), CiphertextKind::PreKey);
         assert_eq!(bob.decrypt(&alice, &first)??.as_slice(), b"oi, bob");
 
         let reply = bob.encrypt(&alice, b"oi, alice")?;
-        assert_eq!(reply.kind(), EnvelopeKind::Message);
+        assert_eq!(reply.kind(), CiphertextKind::Message);
         assert_eq!(alice.decrypt(&bob, &reply)??.as_slice(), b"oi, alice");
 
         let next = alice.encrypt(&bob, b"tudo bem?")?;
         assert_eq!(
             next.kind(),
-            EnvelopeKind::Message,
+            CiphertextKind::Message,
             "sessão confirmada pela resposta"
         );
         assert_eq!(bob.decrypt(&alice, &next)??.as_slice(), b"tudo bem?");
@@ -231,7 +231,7 @@ mod tests {
         if let Some(last) = body.last_mut() {
             *last ^= 0x01;
         }
-        let tampered = Envelope::new(EnvelopeKind::PreKey, body);
+        let tampered = Ciphertext::new(CiphertextKind::PreKey, body);
         assert_eq!(
             bob.decrypt(&alice, &tampered)?,
             Err(ProtocolError::InvalidMessage)
@@ -242,7 +242,7 @@ mod tests {
     #[test]
     fn envelope_com_tipo_trocado_e_recusado() -> TestResult {
         let (alice, mut bob, first) = alice_and_bob()?;
-        let mislabeled = Envelope::new(EnvelopeKind::Message, first.body().to_vec());
+        let mislabeled = Ciphertext::new(CiphertextKind::Message, first.body().to_vec());
         assert!(bob.decrypt(&alice, &mislabeled)?.is_err());
         Ok(())
     }

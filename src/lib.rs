@@ -1,15 +1,19 @@
 //! falaai-core: núcleo do FalaAí.
 //!
 //! A libsignal fica isolada em `protocol` (ADR-0001); o resto do core usa só as traits de lá.
-//! `storage` guarda o banco local cifrado (SQLCipher), sem conhecer a libsignal.
+//! `storage` guarda o banco local cifrado (SQLCipher), sem conhecer a libsignal. `api` é a
+//! superfície exposta ao Flutter, e `frb_generated` a cola FFI gerada a partir dela.
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "consumido pela API flutter_rust_bridge (flc-8lr)")
+pub mod api;
+// Gerado por 'make bindings'. Exportar funções C exige `#[unsafe(no_mangle)]`, por isso o
+// `unsafe_code` liberado só aqui; o código escrito à mão segue sob `deny`.
+#[allow(
+    unsafe_code,
+    missing_docs,
+    clippy::all,
+    clippy::pedantic,
+    clippy::restriction
 )]
+mod frb_generated;
 mod protocol;
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "consumido pela API flutter_rust_bridge (flc-8lr)")
-)]
 mod storage;

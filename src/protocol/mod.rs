@@ -6,6 +6,7 @@
 //! upgrade da libsignal que quebre a API fica contido aqui.
 
 mod error;
+pub(crate) mod keys;
 pub(crate) mod signal;
 pub(crate) mod store;
 #[cfg(test)]
@@ -13,7 +14,9 @@ mod testing;
 
 use std::fmt;
 
-use libsignal_protocol::{Aci, DeviceId, ProtocolAddress};
+use libsignal_protocol::{
+    Aci, DeviceId, IdentityKey, ProtocolAddress, PublicKey, SignalProtocolError, kem,
+};
 use zeroize::Zeroizing;
 
 pub(crate) use error::ProtocolError;
@@ -27,7 +30,7 @@ pub(crate) trait Sessions {
     async fn start_session(
         &mut self,
         peer: &Address,
-        bundle: &PreKeyBundle,
+        bundle: &PeerBundle,
     ) -> Result<(), ProtocolError>;
 
     /// Cifra `plaintext` para `peer`. Exige sessão aberta.
@@ -35,14 +38,14 @@ pub(crate) trait Sessions {
         &mut self,
         peer: &Address,
         plaintext: &[u8],
-    ) -> Result<Envelope, ProtocolError>;
+    ) -> Result<Ciphertext, ProtocolError>;
 
-    /// Decifra um envelope de `peer`. Um envelope [`EnvelopeKind::PreKey`] abre a sessão do
+    /// Decifra um envelope de `peer`. Um envelope [`CiphertextKind::PreKey`] abre a sessão do
     /// lado de quem recebe.
     async fn decrypt(
         &mut self,
         peer: &Address,
-        envelope: &Envelope,
+        envelope: &Ciphertext,
     ) -> Result<Plaintext, ProtocolError>;
 }
 
@@ -73,13 +76,60 @@ impl fmt::Debug for Address {
     }
 }
 
+/// Pré-chave pública EC descartável, serializada no formato da libsignal.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PublicPreKey {
+    pub(crate) id: u32,
+    pub(crate) public_key: Vec<u8>,
+}
+
+/// Pré-chave pública assinada pela identidade (EC assinada ou Kyber), serializada no formato da
+/// libsignal.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SignedPublicPreKey {
+    pub(crate) id: u32,
+    pub(crate) public_key: Vec<u8>,
+    pub(crate) signature: Vec<u8>,
+}
+
 /// Pré-chaves públicas de um dispositivo remoto (identidade, EC assinada, Kyber e EC
 /// descartável opcional), usadas no PQXDH.
-pub(crate) struct PreKeyBundle(libsignal_protocol::PreKeyBundle);
+pub(crate) struct PeerBundle(libsignal_protocol::PreKeyBundle);
 
-/// Como o destinatário deve decifrar um [`Envelope`].
+impl PeerBundle {
+    /// Monta o bundle que `peer` publicou, a partir das chaves serializadas. Chave malformada
+    /// falha aqui com [`ProtocolError::InvalidKey`]; as assinaturas são verificadas ao abrir a
+    /// sessão.
+    pub(crate) fn new(
+        peer: &Address,
+        registration_id: u32,
+        identity_key: &[u8],
+        pre_key: Option<&PublicPreKey>,
+        signed_pre_key: &SignedPublicPreKey,
+        kyber_pre_key: &SignedPublicPreKey,
+    ) -> Result<Self, ProtocolError> {
+        let ec_key = |bytes: &[u8]| PublicKey::try_from(bytes).map_err(SignalProtocolError::from);
+        let pre_key = pre_key
+            .map(|k| Ok::<_, ProtocolError>((k.id.into(), ec_key(&k.public_key)?)))
+            .transpose()?;
+        Ok(Self(libsignal_protocol::PreKeyBundle::new(
+            registration_id,
+            peer.0.device_id(),
+            pre_key,
+            signed_pre_key.id.into(),
+            ec_key(&signed_pre_key.public_key)?,
+            signed_pre_key.signature.clone(),
+            kyber_pre_key.id.into(),
+            kem::PublicKey::deserialize(&kyber_pre_key.public_key)?,
+            kyber_pre_key.signature.clone(),
+            IdentityKey::decode(identity_key)?,
+        )?))
+    }
+}
+
+/// Como o destinatário deve decifrar um [`Ciphertext`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum EnvelopeKind {
+pub(crate) enum CiphertextKind {
     /// Primeira mensagem de uma sessão ainda não confirmada; carrega o material do PQXDH.
     PreKey,
     /// Mensagem de uma sessão estabelecida.
@@ -88,19 +138,19 @@ pub(crate) enum EnvelopeKind {
 
 /// Mensagem cifrada pronta para o transporte.
 #[derive(Clone, PartialEq, Eq)]
-pub(crate) struct Envelope {
-    kind: EnvelopeKind,
+pub(crate) struct Ciphertext {
+    kind: CiphertextKind,
     body: Vec<u8>,
 }
 
-impl Envelope {
+impl Ciphertext {
     /// Remonta um envelope recebido do transporte.
-    pub(crate) fn new(kind: EnvelopeKind, body: Vec<u8>) -> Self {
+    pub(crate) fn new(kind: CiphertextKind, body: Vec<u8>) -> Self {
         Self { kind, body }
     }
 
     /// Tipo do envelope.
-    pub(crate) fn kind(&self) -> EnvelopeKind {
+    pub(crate) fn kind(&self) -> CiphertextKind {
         self.kind
     }
 
@@ -110,9 +160,9 @@ impl Envelope {
     }
 }
 
-impl fmt::Debug for Envelope {
+impl fmt::Debug for Ciphertext {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Envelope")
+        f.debug_struct("Ciphertext")
             .field("kind", &self.kind)
             .field("len", &self.body.len())
             .finish()
@@ -165,7 +215,10 @@ mod tests {
 
     #[test]
     fn debug_do_envelope_omite_os_bytes() {
-        let debug = format!("{:?}", Envelope::new(EnvelopeKind::Message, vec![0xAB; 4]));
-        assert_eq!(debug, "Envelope { kind: Message, len: 4 }");
+        let debug = format!(
+            "{:?}",
+            Ciphertext::new(CiphertextKind::Message, vec![0xAB; 4])
+        );
+        assert_eq!(debug, "Ciphertext { kind: Message, len: 4 }");
     }
 }
