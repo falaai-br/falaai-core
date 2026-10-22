@@ -1,0 +1,9 @@
+# protoc pinado, instalado por 'make tools' (build script da libsignal usa prost-build).
+# Uma variável PROTOC já definida no ambiente tem precedência.
+[env]
+PROTOC = { value = ".tools/protoc/bin/protoc", relative = true }
+
+# A libsignal vem por git (ADR-0001). O git do sistema respeita a configuração de credenciais
+# e reescritas de URL (ex.: insteadOf para SSH) que o libgit2 embutido no cargo ignora.
+[net]
+git-fetch-with-cli = true
