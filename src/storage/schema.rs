@@ -68,4 +68,12 @@ pub(super) const MIGRATIONS: &[&str] = &[
         device_id INTEGER NOT NULL
     ) STRICT;
     ",
+    // 3: profile key de cada contato (por conta), da qual sai a unidentified access key do
+    // sealed sender. Segredo: só sai do banco para derivar a chave.
+    "
+    CREATE TABLE peer_profile_keys (
+        aci TEXT PRIMARY KEY,
+        profile_key BLOB NOT NULL CHECK (length(profile_key) = 32)
+    ) STRICT;
+    ",
 ];

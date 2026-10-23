@@ -24,6 +24,18 @@ rusqlite = { version = "0.40.2", default-features = false, features = ["bundled-
 thiserror = "2.0"
 zeroize = "1.8.2"
 flutter_rust_bridge = { version = "=2.13.0", default-features = false, features = ["anyhow", "dart-opaque", "rust-async", "thread-pool"] }
+# Unidentified access key do sealed sender (ProfileKey::derive_access_key). Mesmo commit da
+# libsignal-protocol acima.
+zkgroup = { git = "https://github.com/signalapp/libsignal", rev = "b2a5c30f3245c1bcad04b27b1e752a38321c793d" }
+# Transporte (src/transport): frames protobuf do falaai-proto, WebSocket e HTTPS síncronos sobre
+# rustls com ring. prost na mesma série que a libsignal já trava.
+prost = "0.14.4"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+tungstenite = { version = "0.30", default-features = false, features = ["handshake", "__rustls-tls"] }
+ureq = { version = "3.5", default-features = false, features = ["rustls", "json"] }
+webpki-roots = "1.0"
+base64 = "0.23"
+serde = { version = "1.0", features = ["derive"] }
 
 [target.'cfg(not(target_vendor = "apple"))'.dependencies]
 rusqlite = { version = "0.40.2", default-features = false, features = ["bundled-sqlcipher-vendored-openssl"] }
@@ -36,7 +48,6 @@ test-support = []
 [dev-dependencies]
 falaai-core = { path = ".", features = ["test-support"] }
 # Vetores de envelope (tests/envelope_vectors.rs). Mesmas versões que a libsignal já trava.
-prost = "0.14.4"
 serde_json = "1.0.154"
 sha2 = "0.11.1"
 tempfile = "3.27.0"

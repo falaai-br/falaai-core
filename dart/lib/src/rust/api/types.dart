@@ -9,7 +9,7 @@ import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
 part 'types.freezed.dart';
 
 // These functions are ignored because they are not marked as `pub`: `to_protocol`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `try_from`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `try_from`
 
 /// Parte pública das chaves da conta, para enviar ao servidor no registro.
 class AccountKeys {
@@ -185,6 +185,38 @@ class PreKeyBundle {
           preKey == other.preKey &&
           signedPreKey == other.signedPreKey &&
           kyberPreKey == other.kyberPreKey;
+}
+
+/// Onde fica o servidor, da configuração do app.
+class ServerConfig {
+  /// Base do gateway, sem caminho: `wss://gw.falaai.com.br`. `ws://` só no loopback.
+  final String gatewayUrl;
+
+  /// Base do `accounts`, sem caminho: `https://…`. `http://` só no loopback.
+  final String accountsUrl;
+
+  /// Certificados raiz em DER. Vazio confia nas raízes da Mozilla; com certificados, só neles
+  /// (pinning pela CA do servidor).
+  final List<Uint8List> rootCertificates;
+
+  const ServerConfig({
+    required this.gatewayUrl,
+    required this.accountsUrl,
+    required this.rootCertificates,
+  });
+
+  @override
+  int get hashCode =>
+      gatewayUrl.hashCode ^ accountsUrl.hashCode ^ rootCertificates.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ServerConfig &&
+          runtimeType == other.runtimeType &&
+          gatewayUrl == other.gatewayUrl &&
+          accountsUrl == other.accountsUrl &&
+          rootCertificates == other.rootCertificates;
 }
 
 /// Pré-chave pública assinada pela identidade: EC assinada ou Kyber.

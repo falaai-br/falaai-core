@@ -6,6 +6,7 @@ use flutter_rust_bridge::frb;
 use super::FalaaiCore;
 use super::error::CoreError;
 use super::types::{DeviceAddress, Envelope};
+use crate::protocol::access::{AccessKey, PROFILE_KEY_LEN};
 use crate::protocol::certificate::CertificateIssuer;
 use crate::protocol::{self, Address};
 
@@ -38,6 +39,13 @@ impl TestAccounts {
     }
 }
 
+/// Unidentified access key derivada de `profile_key`: o que o destinatário registraria no
+/// `accounts` e o gateway compara.
+#[frb(ignore)]
+pub fn unidentified_access_key(profile_key: &[u8; PROFILE_KEY_LEN]) -> Vec<u8> {
+    AccessKey::derive(profile_key).as_bytes().to_vec()
+}
+
 /// Tipo da mensagem dentro do selo.
 #[frb(ignore)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -49,6 +57,18 @@ pub enum SealedKind {
 }
 
 impl FalaaiCore {
+    /// Grava a profile key da conta de `peer`, o que a troca de profile key dentro do conteúdo
+    /// E2EE fará quando existir.
+    #[frb(ignore)]
+    pub fn set_peer_profile_key(
+        &self,
+        peer: &DeviceAddress,
+        profile_key: &[u8; PROFILE_KEY_LEN],
+    ) -> Result<(), CoreError> {
+        let peer = Address::try_from(peer)?;
+        Ok(self.store.set_peer_profile_key(&peer, profile_key)?)
+    }
+
     /// Abre o selo de um envelope destinado a este núcleo e diz o tipo da mensagem dentro dele,
     /// sem decifrá-la nem tocar no ratchet.
     #[frb(ignore)]

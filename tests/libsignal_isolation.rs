@@ -30,7 +30,11 @@ fn libsignal_so_aparece_em_src_protocol() -> Result<(), Box<dyn Error>> {
 
     let mut offenders = Vec::new();
     for file in files.iter().filter(|f| !f.starts_with(&protocol)) {
-        if fs::read_to_string(file)?.contains("libsignal_protocol") {
+        let source = fs::read_to_string(file)?;
+        if ["libsignal_protocol", "zkgroup"]
+            .iter()
+            .any(|krate| source.contains(krate))
+        {
             offenders.push(file);
         }
     }

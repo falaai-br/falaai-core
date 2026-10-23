@@ -8,10 +8,21 @@ import 'api/types.dart';
 import 'frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `block_on`, `lock`, `subscribe`, `with_sessions`
+// These functions are ignored because they are not marked as `pub`: `block_on`, `disposition`, `lock`, `receive`, `subscribe`, `transport`, `with_sessions`, `with_sessions`
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<FalaaiCore>>
 abstract class FalaaiCore implements RustOpaqueInterface {
+  /// Conecta ao servidor com o token que o `accounts` emitiu no registro deste dispositivo.
+  /// Exige o endereço local ([`Self::set_local_address`]).
+  ///
+  /// Volta logo: o socket autenticado conecta em segundo plano e reconecta sozinho quando cai.
+  /// Cada envelope que chega é decifrado e entregue no stream de [`Self::events`], como em
+  /// [`Self::decrypt`], e só então confirmado ao servidor. Um envelope que nunca vai abrir
+  /// (adulterado, duplicado, de identidade não confiável) também é confirmado e descartado; um
+  /// que falhou por causa local (sem assinante, banco ocupado) fica na fila e volta na próxima
+  /// conexão. Conectar de novo troca a conexão anterior.
+  Future<void> connect({required ServerConfig server, required String token});
+
   /// Abre e decifra um envelope selado e entrega o texto, com o remetente tirado do certificado,
   /// no stream de [`Self::events`] como [`ChatEvent::MessageReceived`]. `server_timestamp` é o
   /// do `Deliver` (milissegundos desde a época Unix): o certificado de remetente tem de valer
@@ -23,6 +34,9 @@ abstract class FalaaiCore implements RustOpaqueInterface {
     required BigInt serverTimestamp,
   });
 
+  /// Fecha a conexão com o servidor. Sem efeito se não houver.
+  Future<void> disconnect();
+
   /// Cifra `plaintext` para `peer` e sela com o certificado de remetente; o resultado vai em
   /// `Envelope.content`. Exige sessão aberta e certificado de remetente válido.
   Future<Envelope> encrypt({
@@ -33,6 +47,11 @@ abstract class FalaaiCore implements RustOpaqueInterface {
   /// Stream de eventos do núcleo. Assinar de novo substitui o assinante anterior (por exemplo,
   /// num hot restart do Flutter).
   Stream<ChatEvent> events();
+
+  /// Pede ao `accounts` um certificado de remetente novo para este dispositivo (vale 24h) e
+  /// devolve os bytes, para o app entregar com [`Self::set_sender_certificate`] e guardar.
+  /// Exige [`Self::connect`], que traz o endereço do servidor e o token.
+  Future<Uint8List> fetchSenderCertificate();
 
   /// Gera identidade, registration id e pré-chaves da conta e devolve só a parte pública,
   /// para o registro no servidor. Falha com [`CoreError::AccountExists`] se já foram geradas.
@@ -56,6 +75,19 @@ abstract class FalaaiCore implements RustOpaqueInterface {
   Future<void> processPrekeyBundle({
     required DeviceAddress peer,
     required PreKeyBundle bundle,
+  });
+
+  /// Envia a `peer` um envelope de [`Self::encrypt`], identificado por `client_message_id`
+  /// (16 bytes, um UUID; reenviar com o mesmo id deixa o destinatário deduplicar). `Ok` quer
+  /// dizer que o servidor gravou na fila do destinatário.
+  ///
+  /// Com a profile key do contato, vai pelo socket não autenticado e o servidor não sabe quem
+  /// envia. Sem ela (primeiro contato), ou se o servidor recusar a access key, vai pelo socket
+  /// autenticado e o servidor vê o par remetente/destinatário (risco residual da ADR-0010).
+  Future<void> send({
+    required DeviceAddress peer,
+    required List<int> clientMessageId,
+    required Envelope envelope,
   });
 
   /// Grava o endereço que o servidor atribuiu a este dispositivo no registro e libera as

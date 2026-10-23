@@ -8,7 +8,7 @@ use std::error::Error;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::sync::mpsc::{self, Receiver};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use falaai_core::api::FalaaiCore;
 use falaai_core::api::error::CoreError;
@@ -157,13 +157,44 @@ impl Device {
         Ok(self.try_receive(from, envelope)??)
     }
 
+    /// O núcleo do aparelho, para o que não tem atalho aqui.
+    pub fn core(&self) -> &FalaaiCore {
+        &self.core
+    }
+
+    /// Chave pública de identidade do aparelho.
+    pub fn identity_key(&self) -> &[u8] {
+        &self.keys.identity_key
+    }
+
+    /// Próxima mensagem que chegar no stream de eventos em até `timeout`, com o remetente.
+    pub fn next_message(
+        &self,
+        timeout: Duration,
+    ) -> Result<(DeviceAddress, Vec<u8>), Box<dyn Error>> {
+        match self.events.recv_timeout(timeout)? {
+            ChatEvent::MessageReceived { from, body } => Ok((from, body)),
+        }
+    }
+
     /// Fecha e reabre o banco, como o app ao voltar do background ou o NSE do iOS ao acordar.
     pub fn reopen(&mut self) -> TestResult {
+        self.reopen_without_events()?;
+        self.subscribe();
+        Ok(())
+    }
+
+    /// Como [`Self::reopen`], mas sem assinar o stream de eventos.
+    pub fn reopen_without_events(&mut self) -> TestResult {
         self.core = open(&self.db_path, &self.db_key)?;
         self.core
             .set_sender_certificate(self.sender_certificate.clone())?;
-        self.events = subscribe(&self.core);
         Ok(())
+    }
+
+    /// Assina o stream de eventos de novo.
+    pub fn subscribe(&mut self) {
+        self.events = subscribe(&self.core);
     }
 }
 

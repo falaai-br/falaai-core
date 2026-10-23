@@ -6,7 +6,8 @@
 import '../frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `clone`, `eq`, `fmt`, `fmt`, `from`, `from`
+// These functions are ignored because they are not marked as `pub`: `from_sent`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `clone`, `eq`, `fmt`, `fmt`, `from`, `from`, `from`
 
 /// Erro de uma chamada ao núcleo. As variantes não carregam endereço, ACI, chave nem conteúdo.
 enum CoreError {
@@ -60,6 +61,32 @@ enum CoreError {
 
   /// Ninguém ouve o stream de eventos, então a mensagem decifrada não teria para onde ir.
   noEventListener,
+
+  /// URL do servidor malformada, com caminho ou sem TLS fora do loopback, ou certificado raiz
+  /// malformado.
+  invalidServerConfig,
+
+  /// Falha de rede, de TLS ou tempo esgotado; tentar de novo mais tarde.
+  network,
+
+  /// Sem conexão com o servidor: chamar `connect`, ou esperar a reconexão.
+  notConnected,
+
+  /// O servidor recusou o token do dispositivo.
+  unauthorized,
+
+  /// O servidor respondeu fora do contrato.
+  invalidServerResponse,
+
+  /// O servidor recusou o envelope, ou o `client_message_id` não tem 16 bytes; reenviar igual
+  /// não adianta.
+  invalidEnvelope,
+
+  /// Destinatário ou dispositivo inexistente.
+  unknownDestination,
+
+  /// Limite de taxa do servidor; reenviar com backoff.
+  rateLimited,
 
   /// Estado inesperado do núcleo.
   internal,

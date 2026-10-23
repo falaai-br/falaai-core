@@ -1,6 +1,6 @@
 //! Fronteira com a libsignal (ADR-0001).
 //!
-//! Único módulo do crate que importa `libsignal_protocol`. O restante do core depende só da
+//! Único módulo do crate que importa `libsignal_protocol` e o `zkgroup` da libsignal. O restante do core depende só da
 //! trait [`Sessions`] e dos tipos daqui, que não expõem tipos da libsignal; o storage entra
 //! pela trait [`signal::SignalStores`], implementada sobre o banco local em [`store`]. Um
 //! upgrade da libsignal que quebre a API fica contido aqui.
@@ -8,6 +8,7 @@
 //! Toda mensagem sai selada (sealed sender): o remetente só aparece dentro do selo, que só o
 //! destinatário abre, junto com o certificado de remetente emitido pelo servidor.
 
+pub(crate) mod access;
 pub(crate) mod certificate;
 mod error;
 pub(crate) mod keys;

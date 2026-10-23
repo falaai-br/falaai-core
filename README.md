@@ -9,7 +9,7 @@ Núcleo criptográfico e de mensagens do **FalaAí**, em Rust. Encapsula a [libs
 | `protocol` | Wrapper da libsignal e implementação dos stores |
 | `storage` | SQLCipher, chave no Keychain/Keystore |
 | `messaging` | Outbox, recibos, efêmeras |
-| `transport` | WebSocket/HTTPS com pinning |
+| `transport` | WebSocket do gateway (autenticado e não autenticado, sealed sender) e HTTPS do `accounts`, sobre rustls; pinning pela CA da configuração |
 | `media` | Cifra de anexos em streaming |
 | `api` | Superfície exposta ao Flutter |
 

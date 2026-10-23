@@ -18,6 +18,7 @@ use rusqlite::{OptionalExtension, Params, TransactionBehavior, params};
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
+use super::access::PROFILE_KEY_LEN;
 use super::signal::{SignalStores, StoreParts};
 use super::{Address, ProtocolError};
 use crate::storage::{Database, StorageError};
@@ -160,6 +161,56 @@ impl SqliteStore {
             Outcome::NoAccount => Err(ProtocolError::NoAccount),
             Outcome::Conflict => Err(ProtocolError::AccountExists),
         }
+    }
+
+    /// Profile key da conta de `peer`, se já chegou pelo canal E2EE.
+    pub(crate) fn peer_profile_key(
+        &self,
+        peer: &Address,
+    ) -> Result<Option<Zeroizing<[u8; PROFILE_KEY_LEN]>>, ProtocolError> {
+        let stored = self
+            .db
+            .with(|c| {
+                c.query_row(
+                    "SELECT profile_key FROM peer_profile_keys WHERE aci = ?1",
+                    [peer.aci()],
+                    |row| row.get::<_, Vec<u8>>(0).map(Zeroizing::new),
+                )
+                .optional()
+            })
+            .map_err(|_| ProtocolError::Storage)?;
+        stored
+            .map(|bytes| {
+                let mut key = Zeroizing::new([0; PROFILE_KEY_LEN]);
+                if bytes.len() != key.len() {
+                    return Err(ProtocolError::Storage);
+                }
+                key.copy_from_slice(&bytes);
+                Ok(key)
+            })
+            .transpose()
+    }
+
+    /// Grava (ou troca) a profile key da conta de `peer`.
+    ///
+    /// Só os testes gravam por enquanto: a profile key chega dentro do conteúdo E2EE, que ainda
+    /// não tem esse campo.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn set_peer_profile_key(
+        &self,
+        peer: &Address,
+        profile_key: &[u8; PROFILE_KEY_LEN],
+    ) -> Result<(), ProtocolError> {
+        self.db
+            .with(|c| {
+                c.execute(
+                    "INSERT INTO peer_profile_keys (aci, profile_key) VALUES (?1, ?2) \
+                     ON CONFLICT (aci) DO UPDATE SET profile_key = excluded.profile_key",
+                    params![peer.aci(), profile_key.as_slice()],
+                )
+            })
+            .map_err(|_| ProtocolError::Storage)?;
+        Ok(())
     }
 
     /// Grava só a identidade local, sem pré-chaves.
@@ -629,6 +680,29 @@ mod tests {
         let kept = ready(store.get_identity_key_pair())??;
         assert_eq!(kept.serialize(), identity.serialize());
         assert_eq!(ready(store.get_local_registration_id())??, 42);
+        Ok(())
+    }
+
+    #[test]
+    fn profile_key_do_contato_e_por_conta_e_pode_trocar() -> TestResult {
+        let store = store()?;
+        let bob = Address::new("b0b0b0b0-0000-4000-8000-000000000000", 1)?;
+        let bob_other_device = Address::new("b0b0b0b0-0000-4000-8000-000000000000", 2)?;
+        let carol = Address::new("c0c0c0c0-0000-4000-8000-000000000000", 1)?;
+        assert!(store.peer_profile_key(&bob)?.is_none());
+
+        store.set_peer_profile_key(&bob, &[0x01; PROFILE_KEY_LEN])?;
+        assert_eq!(
+            store.peer_profile_key(&bob_other_device)?.as_deref(),
+            Some(&[0x01; PROFILE_KEY_LEN])
+        );
+        assert!(store.peer_profile_key(&carol)?.is_none());
+
+        store.set_peer_profile_key(&bob, &[0x02; PROFILE_KEY_LEN])?;
+        assert_eq!(
+            store.peer_profile_key(&bob)?.as_deref(),
+            Some(&[0x02; PROFILE_KEY_LEN])
+        );
         Ok(())
     }
 

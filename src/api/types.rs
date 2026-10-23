@@ -193,6 +193,18 @@ impl From<Envelope> for protocol::Ciphertext {
     }
 }
 
+/// Onde fica o servidor, da configuração do app.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ServerConfig {
+    /// Base do gateway, sem caminho: `wss://gw.falaai.com.br`. `ws://` só no loopback.
+    pub gateway_url: String,
+    /// Base do `accounts`, sem caminho: `https://…`. `http://` só no loopback.
+    pub accounts_url: String,
+    /// Certificados raiz em DER. Vazio confia nas raízes da Mozilla; com certificados, só neles
+    /// (pinning pela CA do servidor).
+    pub root_certificates: Vec<Vec<u8>>,
+}
+
 /// Evento emitido pelo núcleo no stream de [`super::FalaaiCore::events`].
 #[derive(Clone, PartialEq, Eq)]
 pub enum ChatEvent {

@@ -2,6 +2,7 @@
 
 use crate::protocol::ProtocolError;
 use crate::storage::StorageError;
+use crate::transport::{Sent, TransportError};
 
 /// Erro de uma chamada ao núcleo. As variantes não carregam endereço, ACI, chave nem conteúdo.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
@@ -57,6 +58,32 @@ pub enum CoreError {
     /// Ninguém ouve o stream de eventos, então a mensagem decifrada não teria para onde ir.
     #[error("sem assinante do stream de eventos")]
     NoEventListener,
+    /// URL do servidor malformada, com caminho ou sem TLS fora do loopback, ou certificado raiz
+    /// malformado.
+    #[error("configuração do servidor inválida")]
+    InvalidServerConfig,
+    /// Falha de rede, de TLS ou tempo esgotado; tentar de novo mais tarde.
+    #[error("falha de rede")]
+    Network,
+    /// Sem conexão com o servidor: chamar `connect`, ou esperar a reconexão.
+    #[error("sem conexão com o servidor")]
+    NotConnected,
+    /// O servidor recusou o token do dispositivo.
+    #[error("credencial do dispositivo recusada")]
+    Unauthorized,
+    /// O servidor respondeu fora do contrato.
+    #[error("resposta inválida do servidor")]
+    InvalidServerResponse,
+    /// O servidor recusou o envelope, ou o `client_message_id` não tem 16 bytes; reenviar igual
+    /// não adianta.
+    #[error("envelope inválido")]
+    InvalidEnvelope,
+    /// Destinatário ou dispositivo inexistente.
+    #[error("destinatário inexistente")]
+    UnknownDestination,
+    /// Limite de taxa do servidor; reenviar com backoff.
+    #[error("limite de envio atingido")]
+    RateLimited,
     /// Estado inesperado do núcleo.
     #[error("erro interno do núcleo")]
     Internal,
@@ -89,6 +116,33 @@ impl From<StorageError> for CoreError {
             StorageError::Busy => Self::DatabaseBusy,
             StorageError::UnsupportedVersion => Self::UnsupportedDatabaseVersion,
             StorageError::Sqlite => Self::Storage,
+        }
+    }
+}
+
+impl From<TransportError> for CoreError {
+    fn from(error: TransportError) -> Self {
+        match error {
+            TransportError::InvalidEndpoint | TransportError::InvalidRootCertificate => {
+                Self::InvalidServerConfig
+            }
+            TransportError::Network => Self::Network,
+            TransportError::NotConnected => Self::NotConnected,
+            TransportError::Unauthorized => Self::Unauthorized,
+            TransportError::Protocol => Self::InvalidServerResponse,
+        }
+    }
+}
+
+impl CoreError {
+    /// Erro de um envio que o servidor respondeu sem aceitar.
+    pub(crate) fn from_sent(sent: Sent) -> Result<(), Self> {
+        match sent {
+            Sent::Accepted => Ok(()),
+            Sent::Invalid => Err(Self::InvalidEnvelope),
+            Sent::UnknownDestination => Err(Self::UnknownDestination),
+            Sent::RateLimited => Err(Self::RateLimited),
+            Sent::Unauthorized => Err(Self::Unauthorized),
         }
     }
 }

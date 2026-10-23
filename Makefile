@@ -10,10 +10,14 @@ GITLEAKS_VERSION    ?= 8.28.0
 FRB_CODEGEN_VERSION  ?= 2.13.0
 CARGO_EXPAND_VERSION ?= 1.0.127
 
-# protoc: exigido pelo build script da libsignal (prost-build). Instalado em .tools/ com
-# checksum verificado; o caminho é fixado em .cargo/config.toml (PROTOC).
+# protoc: exigido pelos build scripts da libsignal. Instalado em .tools/ com checksum
+# verificado. O prost-build lê o caminho de PROTOC (fixado em .cargo/config.toml); o
+# protobuf-codegen do zkgroup só procura no PATH; por isso o PATH e o SHELL refeitos aqui,
+# depois dos de mk/hooks.mk (o Make 3.81 do macOS só respeita o PATH passado pelo SHELL).
 PROTOC_VERSION := 36.2
 PROTOC_DIR     := .tools/protoc
+export PATH    := $(CURDIR)/$(PROTOC_DIR)/bin:$(PATH)
+SHELL          := env PATH=$(PATH) /bin/sh
 PROTOC_SHA256_osx-aarch_64   := 9cd98a532c5c5e0c4161314de0225de27e4c8a323917b6ea7b1b714d3ae23466
 PROTOC_SHA256_osx-x86_64     := 228cc7add4616cc14ca5e80dee83209d44449a7aee95a914ae748fa374efb078
 PROTOC_SHA256_linux-aarch_64 := 8b8f18bd2b30346efbc698dd5a73dd7c805f3ef8380f6dfc95c768f3f1852f6a

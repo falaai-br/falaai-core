@@ -9,6 +9,11 @@
 //! entrega o trust root do servidor ao abrir o núcleo e o certificado de remetente emitido pelo
 //! `accounts` com [`FalaaiCore::set_sender_certificate`].
 //!
+//! O transporte também é do núcleo: o app não abre socket nem HTTPS. [`FalaaiCore::connect`]
+//! abre o socket autenticado, que recebe, decifra e confirma envelopes em segundo plano;
+//! [`FalaaiCore::send`] envia pelo socket não autenticado sempre que tem a unidentified access
+//! key do destinatário (ADR-0010).
+//!
 //! As funções são síncronas no Rust e o flutter_rust_bridge as roda no seu pool de threads; no
 //! Dart todas devolvem `Future`. Os futuros da libsignal não são `Send` e os stores sobre SQLite
 //! nunca suspendem, então são conduzidos na própria thread por [`block_on`].
@@ -25,16 +30,22 @@ use std::task::{Context, Poll, Wake, Waker};
 use std::thread::{self, Thread};
 
 use flutter_rust_bridge::frb;
+use uuid::Uuid;
 use zeroize::Zeroizing;
 
 use self::error::CoreError;
-use self::types::{AccountKeys, ChatEvent, DeviceAddress, Envelope, PreKeyBundle};
+use self::types::{AccountKeys, ChatEvent, DeviceAddress, Envelope, PreKeyBundle, ServerConfig};
 use crate::frb_generated::StreamSink;
+use crate::protocol::access::AccessKey;
 use crate::protocol::certificate::TrustRoot;
 use crate::protocol::signal::LibsignalSessions;
 use crate::protocol::store::{SqliteStore, SqliteStores};
 use crate::protocol::{self, Address, ProtocolError, Sessions};
 use crate::storage::{Database, DatabaseKey};
+use crate::transport::{Credentials, Disposition, Outgoing, Server, Transport};
+
+/// Tamanho do `client_message_id`: um UUID.
+const CLIENT_MESSAGE_ID_LEN: usize = 16;
 
 /// Núcleo aberto sobre o banco local de um dispositivo. No Dart é um handle opaco.
 #[frb(opaque)]
@@ -43,9 +54,14 @@ pub struct FalaaiCore {
     store: SqliteStore,
     trust_root: TrustRoot,
     /// Vazio até o endereço local ser conhecido: a libsignal precisa dele nas sessões.
-    sessions: Mutex<Option<LibsignalSessions<SqliteStores>>>,
-    events: Mutex<Option<Deliver>>,
+    /// Compartilhado com a thread do socket autenticado, que decifra o que chega.
+    sessions: Arc<Mutex<Option<CoreSessions>>>,
+    events: Arc<Mutex<Option<Deliver>>>,
+    /// Conexão com o servidor, depois de [`Self::connect`].
+    transport: Mutex<Option<Arc<Transport>>>,
 }
+
+type CoreSessions = LibsignalSessions<SqliteStores>;
 
 /// Entrega um evento ao assinante; `false` se ele já fechou o stream. Closure e não trait: o
 /// codegen exporta para o Dart toda trait de `api`.
@@ -73,8 +89,9 @@ impl FalaaiCore {
             db,
             store,
             trust_root,
-            sessions: Mutex::new(sessions),
-            events: Mutex::new(None),
+            sessions: Arc::new(Mutex::new(sessions)),
+            events: Arc::new(Mutex::new(None)),
+            transport: Mutex::new(None),
         })
     }
 
@@ -139,21 +156,84 @@ impl FalaaiCore {
     /// evento foi entregue e o envelope pode ser confirmado ao servidor. Sem assinante, falha com
     /// [`CoreError::NoEventListener`] antes de tocar no ratchet.
     pub fn decrypt(&self, envelope: Envelope, server_timestamp: u64) -> Result<(), CoreError> {
-        let envelope = protocol::Ciphertext::from(envelope);
-        // O assinante fica travado durante a decifragem: não troca entre a checagem e a entrega.
-        let events = lock(&self.events);
-        let deliver = events.as_ref().ok_or(CoreError::NoEventListener)?;
-        let decrypted =
-            self.with_sessions(|sessions| block_on(sessions.decrypt(&envelope, server_timestamp)))?;
-        let event = ChatEvent::MessageReceived {
-            from: DeviceAddress::from(&decrypted.from),
-            body: decrypted.plaintext.to_vec(),
-        };
-        if deliver(event) {
-            Ok(())
-        } else {
-            Err(CoreError::NoEventListener)
+        receive(
+            &self.sessions,
+            &self.events,
+            &protocol::Ciphertext::from(envelope),
+            server_timestamp,
+        )
+    }
+
+    /// Conecta ao servidor com o token que o `accounts` emitiu no registro deste dispositivo.
+    /// Exige o endereço local ([`Self::set_local_address`]).
+    ///
+    /// Volta logo: o socket autenticado conecta em segundo plano e reconecta sozinho quando cai.
+    /// Cada envelope que chega é decifrado e entregue no stream de [`Self::events`], como em
+    /// [`Self::decrypt`], e só então confirmado ao servidor. Um envelope que nunca vai abrir
+    /// (adulterado, duplicado, de identidade não confiável) também é confirmado e descartado; um
+    /// que falhou por causa local (sem assinante, banco ocupado) fica na fila e volta na próxima
+    /// conexão. Conectar de novo troca a conexão anterior.
+    pub fn connect(&self, server: ServerConfig, token: String) -> Result<(), CoreError> {
+        let token = Zeroizing::new(token);
+        let server = Server::new(
+            &server.gateway_url,
+            &server.accounts_url,
+            &server.root_certificates,
+        )?;
+        let local = self.store.local_address()?.ok_or(CoreError::NoAccount)?;
+        let credentials = Credentials::new(local.aci(), local.device_id(), token);
+        let (sessions, events) = (self.sessions.clone(), self.events.clone());
+        let transport = Transport::connect(&server, credentials, move |content, timestamp| {
+            let envelope = protocol::Ciphertext::new(content.to_vec());
+            disposition(receive(&sessions, &events, &envelope, timestamp))
+        })?;
+        *lock(&self.transport) = Some(Arc::new(transport));
+        Ok(())
+    }
+
+    /// Fecha a conexão com o servidor. Sem efeito se não houver.
+    pub fn disconnect(&self) {
+        *lock(&self.transport) = None;
+    }
+
+    /// Envia a `peer` um envelope de [`Self::encrypt`], identificado por `client_message_id`
+    /// (16 bytes, um UUID; reenviar com o mesmo id deixa o destinatário deduplicar). `Ok` quer
+    /// dizer que o servidor gravou na fila do destinatário.
+    ///
+    /// Com a profile key do contato, vai pelo socket não autenticado e o servidor não sabe quem
+    /// envia. Sem ela (primeiro contato), ou se o servidor recusar a access key, vai pelo socket
+    /// autenticado e o servidor vê o par remetente/destinatário (risco residual da ADR-0010).
+    pub fn send(
+        &self,
+        peer: DeviceAddress,
+        client_message_id: Vec<u8>,
+        envelope: Envelope,
+    ) -> Result<(), CoreError> {
+        let peer = Address::try_from(&peer)?;
+        if client_message_id.len() != CLIENT_MESSAGE_ID_LEN {
+            return Err(CoreError::InvalidEnvelope);
         }
+        let destination_aci = Uuid::parse_str(peer.aci())
+            .map_err(|_| CoreError::InvalidAddress)?
+            .into_bytes();
+        let access_key = AccessKey::of(&self.store, &peer)?;
+        let outgoing = Outgoing {
+            destination_aci,
+            destination_device_id: peer.device_id(),
+            client_message_id,
+            content: envelope.body,
+        };
+        let sent = self
+            .transport()?
+            .send(outgoing, access_key.as_ref().map(AccessKey::as_bytes))?;
+        CoreError::from_sent(sent)
+    }
+
+    /// Pede ao `accounts` um certificado de remetente novo para este dispositivo (vale 24h) e
+    /// devolve os bytes, para o app entregar com [`Self::set_sender_certificate`] e guardar.
+    /// Exige [`Self::connect`], que traz o endereço do servidor e o token.
+    pub fn fetch_sender_certificate(&self) -> Result<Vec<u8>, CoreError> {
+        Ok(self.transport()?.sender_certificate()?)
     }
 
     /// Stream de eventos do núcleo. Assinar de novo substitui o assinante anterior (por exemplo,
@@ -177,11 +257,62 @@ impl FalaaiCore {
 
     fn with_sessions<T>(
         &self,
-        f: impl FnOnce(&mut LibsignalSessions<SqliteStores>) -> Result<T, ProtocolError>,
+        f: impl FnOnce(&mut CoreSessions) -> Result<T, ProtocolError>,
     ) -> Result<T, CoreError> {
-        let mut sessions = lock(&self.sessions);
-        let sessions = sessions.as_mut().ok_or(CoreError::NoAccount)?;
-        Ok(f(sessions)?)
+        with_sessions(&self.sessions, f)
+    }
+
+    fn transport(&self) -> Result<Arc<Transport>, CoreError> {
+        lock(&self.transport).clone().ok_or(CoreError::NotConnected)
+    }
+}
+
+fn with_sessions<T>(
+    sessions: &Mutex<Option<CoreSessions>>,
+    f: impl FnOnce(&mut CoreSessions) -> Result<T, ProtocolError>,
+) -> Result<T, CoreError> {
+    let mut sessions = lock(sessions);
+    let sessions = sessions.as_mut().ok_or(CoreError::NoAccount)?;
+    Ok(f(sessions)?)
+}
+
+/// Abre e decifra `envelope` e entrega o texto ao assinante de eventos. Sem assinante, falha com
+/// [`CoreError::NoEventListener`] antes de tocar no ratchet.
+fn receive(
+    sessions: &Mutex<Option<CoreSessions>>,
+    events: &Mutex<Option<Deliver>>,
+    envelope: &protocol::Ciphertext,
+    server_timestamp: u64,
+) -> Result<(), CoreError> {
+    // O assinante fica travado durante a decifragem: não troca entre a checagem e a entrega.
+    let events = lock(events);
+    let deliver = events.as_ref().ok_or(CoreError::NoEventListener)?;
+    let decrypted = with_sessions(sessions, |sessions| {
+        block_on(sessions.decrypt(envelope, server_timestamp))
+    })?;
+    let event = ChatEvent::MessageReceived {
+        from: DeviceAddress::from(&decrypted.from),
+        body: decrypted.plaintext.to_vec(),
+    };
+    if deliver(event) {
+        Ok(())
+    } else {
+        Err(CoreError::NoEventListener)
+    }
+}
+
+/// Confirmar ou não ao servidor um envelope recebido pelo socket. Confirma o que foi entregue e
+/// o que nunca vai abrir; segura o que falhou por causa local passageira.
+fn disposition(received: Result<(), CoreError>) -> Disposition {
+    match received {
+        Err(
+            CoreError::NoEventListener
+            | CoreError::DatabaseBusy
+            | CoreError::Storage
+            | CoreError::NoAccount
+            | CoreError::Internal,
+        ) => Disposition::Retain,
+        Ok(()) | Err(_) => Disposition::Ack,
     }
 }
 
