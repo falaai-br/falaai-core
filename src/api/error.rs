@@ -102,6 +102,7 @@ impl From<ProtocolError> for CoreError {
             ProtocolError::NoAccount => Self::NoAccount,
             ProtocolError::NoSenderCertificate => Self::NoSenderCertificate,
             ProtocolError::InvalidSenderCertificate => Self::InvalidSenderCertificate,
+            ProtocolError::Busy => Self::DatabaseBusy,
             ProtocolError::Storage => Self::Storage,
             ProtocolError::Internal => Self::Internal,
         }
@@ -115,7 +116,7 @@ impl From<StorageError> for CoreError {
             StorageError::WrongKeyOrCorrupt => Self::WrongDatabaseKey,
             StorageError::Busy => Self::DatabaseBusy,
             StorageError::UnsupportedVersion => Self::UnsupportedDatabaseVersion,
-            StorageError::Sqlite => Self::Storage,
+            StorageError::LockFile | StorageError::Sqlite => Self::Storage,
         }
     }
 }

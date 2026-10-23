@@ -40,7 +40,7 @@ use crate::protocol::access::AccessKey;
 use crate::protocol::certificate::TrustRoot;
 use crate::protocol::signal::LibsignalSessions;
 use crate::protocol::store::{SqliteStore, SqliteStores};
-use crate::protocol::{self, Address, ProtocolError, Sessions};
+use crate::protocol::{self, Address, Sessions};
 use crate::storage::{Database, DatabaseKey};
 use crate::transport::{Credentials, Disposition, Outgoing, Server, Transport};
 
@@ -153,8 +153,12 @@ impl FalaaiCore {
     /// no stream de [`Self::events`] como [`ChatEvent::MessageReceived`]. `server_timestamp` é o
     /// do `Deliver` (milissegundos desde a época Unix): o certificado de remetente tem de valer
     /// nesse instante, então uma mensagem que esperou na fila ainda abre. `Ok` quer dizer que o
-    /// evento foi entregue e o envelope pode ser confirmado ao servidor. Sem assinante, falha com
-    /// [`CoreError::NoEventListener`] antes de tocar no ratchet.
+    /// evento foi entregue e o envelope pode ser confirmado ao servidor.
+    ///
+    /// Decifrar e entregar são atômicos: sem assinante, ou com o stream fechado na entrega, falha
+    /// com [`CoreError::NoEventListener`] e o ratchet não avança, então o mesmo envelope decifra
+    /// de novo. Enquanto o app ou a extensão de notificação decifra, o outro processo espera;
+    /// passado o timeout, falha com [`CoreError::DatabaseBusy`] e o envelope fica para depois.
     pub fn decrypt(&self, envelope: Envelope, server_timestamp: u64) -> Result<(), CoreError> {
         receive(
             &self.sessions,
@@ -162,6 +166,14 @@ impl FalaaiCore {
             &protocol::Ciphertext::from(envelope),
             server_timestamp,
         )
+    }
+
+    /// `true` se outro processo gravou no banco desde a última chamada ou, na primeira, desde a
+    /// abertura: a extensão de notificação do iOS decifrou mensagens ou abriu sessões (ou o app,
+    /// visto da extensão). O app chama ao voltar ao primeiro plano e ao receber o aviso da
+    /// extensão, para recarregar o que mostra; o aviso entre processos é da plataforma.
+    pub fn changed_by_other_process(&self) -> Result<bool, CoreError> {
+        Ok(self.db.changed_elsewhere()?)
     }
 
     /// Conecta ao servidor com o token que o `accounts` emitiu no registro deste dispositivo.
@@ -255,10 +267,13 @@ impl FalaaiCore {
         *lock(&self.events) = Some(deliver);
     }
 
-    fn with_sessions<T>(
+    fn with_sessions<T, E>(
         &self,
-        f: impl FnOnce(&mut CoreSessions) -> Result<T, ProtocolError>,
-    ) -> Result<T, CoreError> {
+        f: impl FnOnce(&mut CoreSessions) -> Result<T, E>,
+    ) -> Result<T, CoreError>
+    where
+        CoreError: From<E>,
+    {
         with_sessions(&self.sessions, f)
     }
 
@@ -267,17 +282,21 @@ impl FalaaiCore {
     }
 }
 
-fn with_sessions<T>(
+fn with_sessions<T, E>(
     sessions: &Mutex<Option<CoreSessions>>,
-    f: impl FnOnce(&mut CoreSessions) -> Result<T, ProtocolError>,
-) -> Result<T, CoreError> {
+    f: impl FnOnce(&mut CoreSessions) -> Result<T, E>,
+) -> Result<T, CoreError>
+where
+    CoreError: From<E>,
+{
     let mut sessions = lock(sessions);
     let sessions = sessions.as_mut().ok_or(CoreError::NoAccount)?;
     Ok(f(sessions)?)
 }
 
-/// Abre e decifra `envelope` e entrega o texto ao assinante de eventos. Sem assinante, falha com
-/// [`CoreError::NoEventListener`] antes de tocar no ratchet.
+/// Abre e decifra `envelope` e entrega o texto ao assinante de eventos, numa transação só: sem
+/// assinante, ou com o stream fechado na entrega, falha com [`CoreError::NoEventListener`] e o
+/// ratchet não avança, então o mesmo envelope decifra de novo quando o servidor o reentregar.
 fn receive(
     sessions: &Mutex<Option<CoreSessions>>,
     events: &Mutex<Option<Deliver>>,
@@ -287,18 +306,19 @@ fn receive(
     // O assinante fica travado durante a decifragem: não troca entre a checagem e a entrega.
     let events = lock(events);
     let deliver = events.as_ref().ok_or(CoreError::NoEventListener)?;
-    let decrypted = with_sessions(sessions, |sessions| {
-        block_on(sessions.decrypt(envelope, server_timestamp))
-    })?;
-    let event = ChatEvent::MessageReceived {
-        from: DeviceAddress::from(&decrypted.from),
-        body: decrypted.plaintext.to_vec(),
-    };
-    if deliver(event) {
-        Ok(())
-    } else {
-        Err(CoreError::NoEventListener)
-    }
+    with_sessions(sessions, |sessions| {
+        block_on(sessions.decrypt(envelope, server_timestamp, |decrypted| {
+            let event = ChatEvent::MessageReceived {
+                from: DeviceAddress::from(&decrypted.from),
+                body: decrypted.plaintext.to_vec(),
+            };
+            if deliver(event) {
+                Ok(())
+            } else {
+                Err(CoreError::NoEventListener)
+            }
+        }))
+    })
 }
 
 /// Confirmar ou não ao servidor um envelope recebido pelo socket. Confirma o que foi entregue e
@@ -429,6 +449,19 @@ mod tests {
             Ok(Self {
                 address,
                 keys,
+                core,
+                events,
+            })
+        }
+
+        /// O mesmo aparelho aberto por outro processo, como a extensão de notificação: outro
+        /// núcleo sobre o banco de `seed`, com os eventos assinados.
+        fn other_process(&self, server: &Server, seed: u8) -> Result<Self, Box<dyn Error>> {
+            let core = server.open(seed)?;
+            let events = subscribe(&core);
+            Ok(Self {
+                address: self.address.clone(),
+                keys: self.keys.clone(),
                 core,
                 events,
             })
@@ -595,15 +628,40 @@ mod tests {
     }
 
     #[test]
-    fn decifrar_com_stream_fechado_falha() -> TestResult {
+    fn decifrar_com_stream_fechado_falha_sem_avancar_o_ratchet() -> TestResult {
         let server = Server::new()?;
         let (alice, mut bob) = alice_and_bob(&server)?;
         bob.events = mpsc::channel().1;
         let first = alice.send(&bob, b"oi, bob")?;
         assert_eq!(
-            bob.core.decrypt(first, now_millis()?),
+            bob.core.decrypt(first.clone(), now_millis()?),
             Err(CoreError::NoEventListener)
         );
+        // O servidor reentrega o envelope não confirmado.
+        bob.events = subscribe(&bob.core);
+        assert_eq!(bob.receive(&alice, first)?, b"oi, bob");
+        Ok(())
+    }
+
+    #[test]
+    fn app_e_extensao_decifram_sobre_o_mesmo_banco() -> TestResult {
+        let server = Server::new()?;
+        let (alice, app) = alice_and_bob(&server)?;
+        let extension = app.other_process(&server, 0xB0)?;
+        let first = alice.send(&app, b"oi, bob")?;
+        let second = alice.send(&app, b"tudo bem?")?;
+        assert!(!app.core.changed_by_other_process()?);
+
+        // A extensão decifra a notificação; o app decifra a seguinte e recusa a repetida.
+        assert_eq!(extension.receive(&alice, first.clone())?, b"oi, bob");
+        assert!(app.core.changed_by_other_process()?);
+        assert_eq!(app.receive(&alice, second)?, b"tudo bem?");
+        assert_eq!(
+            app.core.decrypt(first, now_millis()?),
+            Err(CoreError::DuplicateMessage)
+        );
+        assert!(!app.core.changed_by_other_process()?);
+        assert!(extension.core.changed_by_other_process()?);
         Ok(())
     }
 

@@ -496,7 +496,8 @@ impl KyberPreKeyStore for SqliteStore {
         let outcome = self
             .db
             .with(|c| {
-                let tx = c.transaction()?;
+                // Savepoint e não transação: roda dentro da transação do decrypt.
+                let tx = c.savepoint()?;
                 let last_resort: Option<bool> = tx
                     .query_row(
                         "SELECT last_resort FROM kyber_pre_keys WHERE id = ?1",
@@ -588,6 +589,7 @@ impl SenderKeyStore for SqliteStore {
 /// [`SignalStores`] sobre o banco local. [`StoreParts`] empresta cada store separadamente;
 /// aqui todos são handles da mesma conexão.
 pub(crate) struct SqliteStores {
+    db: Arc<Database>,
     sessions: SqliteStore,
     identities: SqliteStore,
     pre_keys: SqliteStore,
@@ -598,8 +600,9 @@ pub(crate) struct SqliteStores {
 impl SqliteStores {
     /// Stores sobre `db`.
     pub(crate) fn new(db: Arc<Database>) -> Self {
-        let store = SqliteStore::new(db);
+        let store = SqliteStore::new(db.clone());
         Self {
+            db,
             sessions: store.clone(),
             identities: store.clone(),
             pre_keys: store.clone(),
@@ -619,6 +622,26 @@ impl SignalStores for SqliteStores {
             kyber_pre_keys: &mut self.kyber_pre_keys,
         }
     }
+
+    fn begin(&mut self) -> Result<(), ProtocolError> {
+        self.db.begin().map_err(transaction_error)
+    }
+
+    fn commit(&mut self) -> Result<(), ProtocolError> {
+        self.db.commit().map_err(transaction_error)
+    }
+
+    fn rollback(&mut self) {
+        // Só falha se a conexão já desfez a transação sozinha.
+        let _ = self.db.rollback();
+    }
+}
+
+fn transaction_error(error: StorageError) -> ProtocolError {
+    match error {
+        StorageError::Busy => ProtocolError::Busy,
+        _ => ProtocolError::Storage,
+    }
 }
 
 #[cfg(test)]
@@ -635,7 +658,7 @@ mod tests {
     use crate::protocol::certificate::{self, CertificateIssuer, TrustRoot};
     use crate::protocol::signal::LibsignalSessions;
     use crate::protocol::testing::{self, ready};
-    use crate::protocol::{Address, Ciphertext, CiphertextKind, Sessions};
+    use crate::protocol::{Address, Ciphertext, CiphertextKind, Decrypted, Sessions};
     use crate::storage::DatabaseKey;
 
     type TestResult = Result<(), Box<dyn Error>>;
@@ -970,6 +993,20 @@ mod tests {
             Ok(())
         }
 
+        /// O mesmo dispositivo aberto por outro processo, como a extensão de notificação: outra
+        /// conexão ao mesmo arquivo.
+        fn other_process(&self) -> Result<Self, Box<dyn Error>> {
+            let db = Arc::new(Database::open(&self.path, &key()?)?);
+            Ok(Self {
+                sessions: Self::sessions(&self.address, &db, &self.trust_root, &self.certificate)?,
+                address: self.address.clone(),
+                path: self.path.clone(),
+                db,
+                trust_root: self.trust_root.clone(),
+                certificate: self.certificate.clone(),
+            })
+        }
+
         fn store(&self) -> SqliteStore {
             SqliteStore::new(self.db.clone())
         }
@@ -987,27 +1024,27 @@ mod tests {
             from: &Device,
             envelope: &Ciphertext,
         ) -> Result<Result<Vec<u8>, ProtocolError>, Box<dyn Error>> {
+            self.decrypt_then(envelope, |decrypted| {
+                assert_eq!(decrypted.from, from.address);
+                Ok(decrypted.plaintext.to_vec())
+            })
+        }
+
+        /// Decifra e entrega a `deliver` dentro da transação.
+        fn decrypt_then<T>(
+            &mut self,
+            envelope: &Ciphertext,
+            deliver: impl FnOnce(Decrypted) -> Result<T, ProtocolError>,
+        ) -> Result<Result<T, ProtocolError>, Box<dyn Error>> {
             let now = certificate::now()?.epoch_millis();
-            Ok(
-                ready(self.sessions.decrypt(envelope, now))?.map(|decrypted| {
-                    assert_eq!(decrypted.from, from.address);
-                    decrypted.plaintext.to_vec()
-                }),
-            )
+            Ok(ready(self.sessions.decrypt(envelope, now, deliver))?)
         }
     }
 
     #[test]
     fn sessao_sobrevive_a_reabrir_o_banco() -> TestResult {
         let dir = tempfile::tempdir()?;
-        let server = CertificateIssuer::new()?;
-        let mut alice = Device::new(dir.path(), 0xA1, &server)?;
-        let mut bob = Device::new(dir.path(), 0xB0, &server)?;
-        let bundle =
-            testing::publish_bundle(SqliteStores::new(bob.db.clone()).parts(), &bob.address)?;
-
-        ready(alice.sessions.start_session(&bob.address, &bundle))??;
-        let first = alice.encrypt(&bob, b"oi, bob")?;
+        let (mut alice, mut bob, first) = alice_and_bob(dir.path())?;
         assert_eq!(bob.kind(&first)?, CiphertextKind::PreKey);
 
         bob.reopen()?;
@@ -1026,6 +1063,73 @@ mod tests {
         bob.reopen()?;
         assert_eq!(bob.decrypt(&alice, &next)??, b"tudo bem?");
         assert!(bob.decrypt(&alice, &first)?.is_err(), "replay do PQXDH");
+        Ok(())
+    }
+
+    /// Alice abre sessão com Bob e manda a primeira mensagem, que carrega o PQXDH.
+    fn alice_and_bob(dir: &Path) -> Result<(Device, Device, Ciphertext), Box<dyn Error>> {
+        let server = CertificateIssuer::new()?;
+        let mut alice = Device::new(dir, 0xA1, &server)?;
+        let bob = Device::new(dir, 0xB0, &server)?;
+        let bundle =
+            testing::publish_bundle(SqliteStores::new(bob.db.clone()).parts(), &bob.address)?;
+        ready(alice.sessions.start_session(&bob.address, &bundle))??;
+        let first = alice.encrypt(&bob, b"oi, bob")?;
+        Ok((alice, bob, first))
+    }
+
+    #[test]
+    fn entrega_que_falha_desfaz_o_decrypt_inteiro() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let (alice, mut bob, first) = alice_and_bob(dir.path())?;
+        let alice_address = alice.address.0.clone();
+
+        // A libsignal já gravou sessão, identidade e consumo das pré-chaves quando a entrega
+        // falha; nada disso pode ficar.
+        let result = bob.decrypt_then(&first, |_| Err::<(), _>(ProtocolError::Internal))?;
+        assert_eq!(result, Err(ProtocolError::Internal));
+        let store = bob.store();
+        assert!(ready(store.load_session(&alice_address))??.is_none());
+        assert!(ready(store.get_identity(&alice_address))??.is_none());
+        ready(store.get_pre_key(1.into()))??;
+        ready(store.get_kyber_pre_key(1.into()))??;
+
+        assert_eq!(bob.decrypt(&alice, &first)??, b"oi, bob");
+        assert!(ready(store.load_session(&alice_address))??.is_some());
+        assert!(ready(store.get_pre_key(1.into()))?.is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn app_e_extensao_avancam_o_mesmo_ratchet_em_vez() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let (mut alice, mut app, first) = alice_and_bob(dir.path())?;
+        let second = alice.encrypt(&app, b"tudo bem?")?;
+        let mut extension = app.other_process()?;
+
+        assert_eq!(extension.decrypt(&alice, &first)??, b"oi, bob");
+        assert_eq!(app.decrypt(&alice, &second)??, b"tudo bem?");
+        assert_eq!(
+            extension.decrypt(&alice, &first)?,
+            Err(ProtocolError::DuplicateMessage)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn ratchet_preso_por_outro_processo_falha_com_busy() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let (alice, mut bob, first) = alice_and_bob(dir.path())?;
+        let mut db = Database::open(&bob.path, &key()?)?;
+        db.set_timeout(std::time::Duration::from_millis(50))?;
+        bob.db = Arc::new(db);
+        bob.sessions = Device::sessions(&bob.address, &bob.db, &bob.trust_root, &bob.certificate)?;
+
+        let extension = Database::open(&bob.path, &key()?)?;
+        extension.begin()?;
+        assert_eq!(bob.decrypt(&alice, &first)?, Err(ProtocolError::Busy));
+        extension.rollback()?;
+        assert_eq!(bob.decrypt(&alice, &first)??, b"oi, bob");
         Ok(())
     }
 }

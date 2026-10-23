@@ -196,6 +196,12 @@ impl Device {
     pub fn subscribe(&mut self) {
         self.events = subscribe(&self.core);
     }
+
+    /// Fecha o stream de eventos sem tirar o assinante, como o Dart descartando o `StreamSink`:
+    /// a próxima entrega falha.
+    pub fn close_events(&mut self) {
+        self.events = mpsc::channel().1;
+    }
 }
 
 /// ACI de teste, um UUID v4 válido derivado de `seed`.

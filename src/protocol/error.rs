@@ -37,6 +37,9 @@ pub(crate) enum ProtocolError {
     /// dispositivo ou identidade.
     #[error("certificado de remetente inválido")]
     InvalidSenderCertificate,
+    /// Outro processo (o app ou a extensão de notificação) segurou o ratchet além do timeout.
+    #[error("ratchet ocupado por outro processo")]
+    Busy,
     /// Falha devolvida por um store.
     #[error("falha no armazenamento do protocolo")]
     Storage,

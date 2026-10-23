@@ -56,6 +56,9 @@ abstract class FalaaiCoreLibApiImplPlatform
   AccountKeys dco_decode_account_keys(dynamic raw);
 
   @protected
+  bool dco_decode_bool(dynamic raw);
+
+  @protected
   DeviceAddress dco_decode_box_autoadd_device_address(dynamic raw);
 
   @protected
@@ -163,6 +166,9 @@ abstract class FalaaiCoreLibApiImplPlatform
   AccountKeys sse_decode_account_keys(SseDeserializer deserializer);
 
   @protected
+  bool sse_decode_bool(SseDeserializer deserializer);
+
+  @protected
   DeviceAddress sse_decode_box_autoadd_device_address(
     SseDeserializer deserializer,
   );
@@ -248,9 +254,6 @@ abstract class FalaaiCoreLibApiImplPlatform
   BigInt sse_decode_usize(SseDeserializer deserializer);
 
   @protected
-  bool sse_decode_bool(SseDeserializer deserializer);
-
-  @protected
   void sse_encode_AnyhowException(
     AnyhowException self,
     SseSerializer serializer,
@@ -288,6 +291,9 @@ abstract class FalaaiCoreLibApiImplPlatform
 
   @protected
   void sse_encode_account_keys(AccountKeys self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_bool(bool self, SseSerializer serializer);
 
   @protected
   void sse_encode_box_autoadd_device_address(
@@ -384,9 +390,6 @@ abstract class FalaaiCoreLibApiImplPlatform
 
   @protected
   void sse_encode_usize(BigInt self, SseSerializer serializer);
-
-  @protected
-  void sse_encode_bool(bool self, SseSerializer serializer);
 }
 
 // Section: wire_class

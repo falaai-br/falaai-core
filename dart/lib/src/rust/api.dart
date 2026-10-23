@@ -12,6 +12,12 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<FalaaiCore>>
 abstract class FalaaiCore implements RustOpaqueInterface {
+  /// `true` se outro processo gravou no banco desde a última chamada ou, na primeira, desde a
+  /// abertura: a extensão de notificação do iOS decifrou mensagens ou abriu sessões (ou o app,
+  /// visto da extensão). O app chama ao voltar ao primeiro plano e ao receber o aviso da
+  /// extensão, para recarregar o que mostra; o aviso entre processos é da plataforma.
+  Future<bool> changedByOtherProcess();
+
   /// Conecta ao servidor com o token que o `accounts` emitiu no registro deste dispositivo.
   /// Exige o endereço local ([`Self::set_local_address`]).
   ///
@@ -27,8 +33,12 @@ abstract class FalaaiCore implements RustOpaqueInterface {
   /// no stream de [`Self::events`] como [`ChatEvent::MessageReceived`]. `server_timestamp` é o
   /// do `Deliver` (milissegundos desde a época Unix): o certificado de remetente tem de valer
   /// nesse instante, então uma mensagem que esperou na fila ainda abre. `Ok` quer dizer que o
-  /// evento foi entregue e o envelope pode ser confirmado ao servidor. Sem assinante, falha com
-  /// [`CoreError::NoEventListener`] antes de tocar no ratchet.
+  /// evento foi entregue e o envelope pode ser confirmado ao servidor.
+  ///
+  /// Decifrar e entregar são atômicos: sem assinante, ou com o stream fechado na entrega, falha
+  /// com [`CoreError::NoEventListener`] e o ratchet não avança, então o mesmo envelope decifra
+  /// de novo. Enquanto o app ou a extensão de notificação decifra, o outro processo espera;
+  /// passado o timeout, falha com [`CoreError::DatabaseBusy`] e o envelope fica para depois.
   Future<void> decrypt({
     required Envelope envelope,
     required BigInt serverTimestamp,

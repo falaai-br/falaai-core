@@ -72,7 +72,7 @@ class FalaaiCoreLib
   String get codegenVersion => '2.13.0';
 
   @override
-  int get rustContentHash => 1383055571;
+  int get rustContentHash => 555874239;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -84,6 +84,10 @@ class FalaaiCoreLib
 }
 
 abstract class FalaaiCoreLibApi extends BaseApi {
+  Future<bool> crateApiFalaaiCoreChangedByOtherProcess({
+    required FalaaiCore that,
+  });
+
   Future<void> crateApiFalaaiCoreConnect({
     required FalaaiCore that,
     required ServerConfig server,
@@ -162,6 +166,42 @@ class FalaaiCoreLibApiImpl extends FalaaiCoreLibApiImplPlatform
   });
 
   @override
+  Future<bool> crateApiFalaaiCoreChangedByOtherProcess({
+    required FalaaiCore that,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFalaaiCore(
+            that,
+            serializer,
+          );
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 1,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_bool,
+          decodeErrorData: sse_decode_core_error,
+        ),
+        constMeta: kCrateApiFalaaiCoreChangedByOtherProcessConstMeta,
+        argValues: [that],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiFalaaiCoreChangedByOtherProcessConstMeta =>
+      const TaskConstMeta(
+        debugName: "FalaaiCore_changed_by_other_process",
+        argNames: ["that"],
+      );
+
+  @override
   Future<void> crateApiFalaaiCoreConnect({
     required FalaaiCore that,
     required ServerConfig server,
@@ -180,7 +220,7 @@ class FalaaiCoreLibApiImpl extends FalaaiCoreLibApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 1,
+            funcId: 2,
             port: port_,
           );
         },
@@ -219,7 +259,7 @@ class FalaaiCoreLibApiImpl extends FalaaiCoreLibApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 2,
+            funcId: 3,
             port: port_,
           );
         },
@@ -252,7 +292,7 @@ class FalaaiCoreLibApiImpl extends FalaaiCoreLibApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 3,
+            funcId: 4,
             port: port_,
           );
         },
@@ -292,7 +332,7 @@ class FalaaiCoreLibApiImpl extends FalaaiCoreLibApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 4,
+            funcId: 5,
             port: port_,
           );
         },
@@ -328,7 +368,7 @@ class FalaaiCoreLibApiImpl extends FalaaiCoreLibApiImplPlatform
             pdeCallFfi(
               generalizedFrbRustBinding,
               serializer,
-              funcId: 5,
+              funcId: 6,
               port: port_,
             );
           },
@@ -365,7 +405,7 @@ class FalaaiCoreLibApiImpl extends FalaaiCoreLibApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 6,
+            funcId: 7,
             port: port_,
           );
         },
@@ -401,7 +441,7 @@ class FalaaiCoreLibApiImpl extends FalaaiCoreLibApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 7,
+            funcId: 8,
             port: port_,
           );
         },
@@ -438,7 +478,7 @@ class FalaaiCoreLibApiImpl extends FalaaiCoreLibApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 8,
+            funcId: 9,
             port: port_,
           );
         },
@@ -478,7 +518,7 @@ class FalaaiCoreLibApiImpl extends FalaaiCoreLibApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 9,
+            funcId: 10,
             port: port_,
           );
         },
@@ -520,7 +560,7 @@ class FalaaiCoreLibApiImpl extends FalaaiCoreLibApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 10,
+            funcId: 11,
             port: port_,
           );
         },
@@ -557,7 +597,7 @@ class FalaaiCoreLibApiImpl extends FalaaiCoreLibApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 11,
+            funcId: 12,
             port: port_,
           );
         },
@@ -595,7 +635,7 @@ class FalaaiCoreLibApiImpl extends FalaaiCoreLibApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 12,
+            funcId: 13,
             port: port_,
           );
         },
@@ -683,6 +723,12 @@ class FalaaiCoreLibApiImpl extends FalaaiCoreLibApiImplPlatform
       preKeys: dco_decode_list_pre_key(arr[4]),
       kyberPreKeys: dco_decode_list_signed_pre_key(arr[5]),
     );
+  }
+
+  @protected
+  bool dco_decode_bool(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw as bool;
   }
 
   @protected
@@ -959,6 +1005,12 @@ class FalaaiCoreLibApiImpl extends FalaaiCoreLibApiImplPlatform
   }
 
   @protected
+  bool sse_decode_bool(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return deserializer.buffer.getUint8() != 0;
+  }
+
+  @protected
   DeviceAddress sse_decode_box_autoadd_device_address(
     SseDeserializer deserializer,
   ) {
@@ -1185,12 +1237,6 @@ class FalaaiCoreLibApiImpl extends FalaaiCoreLibApiImplPlatform
   }
 
   @protected
-  bool sse_decode_bool(SseDeserializer deserializer) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    return deserializer.buffer.getUint8() != 0;
-  }
-
-  @protected
   void sse_encode_AnyhowException(
     AnyhowException self,
     SseSerializer serializer,
@@ -1270,6 +1316,12 @@ class FalaaiCoreLibApiImpl extends FalaaiCoreLibApiImplPlatform
     sse_encode_signed_pre_key(self.kyberLastResortPreKey, serializer);
     sse_encode_list_pre_key(self.preKeys, serializer);
     sse_encode_list_signed_pre_key(self.kyberPreKeys, serializer);
+  }
+
+  @protected
+  void sse_encode_bool(bool self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    serializer.buffer.putUint8(self ? 1 : 0);
   }
 
   @protected
@@ -1479,12 +1531,6 @@ class FalaaiCoreLibApiImpl extends FalaaiCoreLibApiImplPlatform
     // Codec=Sse (Serialization based), see doc to use other codecs
     serializer.buffer.putBigUint64(self);
   }
-
-  @protected
-  void sse_encode_bool(bool self, SseSerializer serializer) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    serializer.buffer.putUint8(self ? 1 : 0);
-  }
 }
 
 @sealed
@@ -1508,6 +1554,13 @@ class FalaaiCoreImpl extends RustOpaque implements FalaaiCore {
         .rust_arc_decrement_strong_count_FalaaiCorePtr,
   );
 
+  /// `true` se outro processo gravou no banco desde a última chamada ou, na primeira, desde a
+  /// abertura: a extensão de notificação do iOS decifrou mensagens ou abriu sessões (ou o app,
+  /// visto da extensão). O app chama ao voltar ao primeiro plano e ao receber o aviso da
+  /// extensão, para recarregar o que mostra; o aviso entre processos é da plataforma.
+  Future<bool> changedByOtherProcess() => FalaaiCoreLib.instance.api
+      .crateApiFalaaiCoreChangedByOtherProcess(that: this);
+
   /// Conecta ao servidor com o token que o `accounts` emitiu no registro deste dispositivo.
   /// Exige o endereço local ([`Self::set_local_address`]).
   ///
@@ -1528,8 +1581,12 @@ class FalaaiCoreImpl extends RustOpaque implements FalaaiCore {
   /// no stream de [`Self::events`] como [`ChatEvent::MessageReceived`]. `server_timestamp` é o
   /// do `Deliver` (milissegundos desde a época Unix): o certificado de remetente tem de valer
   /// nesse instante, então uma mensagem que esperou na fila ainda abre. `Ok` quer dizer que o
-  /// evento foi entregue e o envelope pode ser confirmado ao servidor. Sem assinante, falha com
-  /// [`CoreError::NoEventListener`] antes de tocar no ratchet.
+  /// evento foi entregue e o envelope pode ser confirmado ao servidor.
+  ///
+  /// Decifrar e entregar são atômicos: sem assinante, ou com o stream fechado na entrega, falha
+  /// com [`CoreError::NoEventListener`] e o ratchet não avança, então o mesmo envelope decifra
+  /// de novo. Enquanto o app ou a extensão de notificação decifra, o outro processo espera;
+  /// passado o timeout, falha com [`CoreError::DatabaseBusy`] e o envelope fica para depois.
   Future<void> decrypt({
     required Envelope envelope,
     required BigInt serverTimestamp,

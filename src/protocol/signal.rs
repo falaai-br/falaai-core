@@ -23,6 +23,48 @@ pub(crate) struct StoreParts<'a> {
 pub(crate) trait SignalStores {
     /// Empresta todos os stores de uma vez.
     fn parts(&mut self) -> StoreParts<'_>;
+
+    /// Abre uma transação: até [`Self::commit`] ou [`Self::rollback`], as gravações dos stores
+    /// valem juntas ou nenhuma, e nenhum outro processo avança o ratchet. Com o ratchet preso
+    /// por outro processo além do timeout, falha com [`ProtocolError::Busy`].
+    fn begin(&mut self) -> Result<(), ProtocolError>;
+
+    /// Confirma a transação aberta por [`Self::begin`].
+    fn commit(&mut self) -> Result<(), ProtocolError>;
+
+    /// Desfaz a transação aberta por [`Self::begin`].
+    fn rollback(&mut self);
+}
+
+/// Transação sobre os stores, desfeita no drop se não for confirmada: um erro no meio de uma
+/// operação da libsignal não deixa o ratchet avançado pela metade.
+struct Transaction<'a, S: SignalStores> {
+    stores: &'a mut S,
+    open: bool,
+}
+
+impl<'a, S: SignalStores> Transaction<'a, S> {
+    fn begin(stores: &'a mut S) -> Result<Self, ProtocolError> {
+        stores.begin()?;
+        Ok(Self { stores, open: true })
+    }
+
+    fn parts(&mut self) -> StoreParts<'_> {
+        self.stores.parts()
+    }
+
+    fn commit(mut self) -> Result<(), ProtocolError> {
+        self.open = false;
+        self.stores.commit()
+    }
+}
+
+impl<S: SignalStores> Drop for Transaction<'_, S> {
+    fn drop(&mut self) {
+        if self.open {
+            self.stores.rollback();
+        }
+    }
 }
 
 /// [`Sessions`] de um dispositivo local, sobre a libsignal.
@@ -72,7 +114,8 @@ impl<S: SignalStores> Sessions for LibsignalSessions<S> {
         peer: &Address,
         bundle: &PeerBundle,
     ) -> Result<(), ProtocolError> {
-        let stores = self.stores.parts();
+        let mut transaction = Transaction::begin(&mut self.stores)?;
+        let stores = transaction.parts();
         process_prekey_bundle(
             &peer.0,
             &self.local.0,
@@ -83,7 +126,7 @@ impl<S: SignalStores> Sessions for LibsignalSessions<S> {
             &mut rand::rng(),
         )
         .await?;
-        Ok(())
+        transaction.commit()
     }
 
     async fn set_sender_certificate(&mut self, certificate: &[u8]) -> Result<(), ProtocolError> {
@@ -122,7 +165,8 @@ impl<S: SignalStores> Sessions for LibsignalSessions<S> {
         if sender.expired(certificate::now()?)? {
             return Err(ProtocolError::NoSenderCertificate);
         }
-        let stores = self.stores.parts();
+        let mut transaction = Transaction::begin(&mut self.stores)?;
+        let stores = transaction.parts();
         let sealed = sealed_sender_encrypt(
             &peer.0,
             &sender.0,
@@ -133,15 +177,18 @@ impl<S: SignalStores> Sessions for LibsignalSessions<S> {
             &mut rand::rng(),
         )
         .await?;
+        transaction.commit()?;
         Ok(Ciphertext::new(sealed))
     }
 
-    async fn decrypt(
+    async fn decrypt<T, E: From<ProtocolError>>(
         &mut self,
         envelope: &Ciphertext,
         server_timestamp: u64,
-    ) -> Result<Decrypted, ProtocolError> {
-        let stores = self.stores.parts();
+        deliver: impl FnOnce(Decrypted) -> Result<T, E>,
+    ) -> Result<T, E> {
+        let mut transaction = Transaction::begin(&mut self.stores)?;
+        let stores = transaction.parts();
         let decrypted = sealed_sender_decrypt(
             envelope.body(),
             &self.trust_root.0,
@@ -155,17 +202,20 @@ impl<S: SignalStores> Sessions for LibsignalSessions<S> {
             stores.signed_pre_keys,
             stores.kyber_pre_keys,
         )
-        .await?;
+        .await
+        .map_err(ProtocolError::from)?;
         // O certificado foi assinado pelo servidor, mas um ACI fora da forma canônica abriria
         // sessão com outro nome para a mesma conta.
         let from = Address::new(&decrypted.sender_uuid, decrypted.device_id.into())
             .ok()
             .filter(|from| from.aci() == decrypted.sender_uuid)
             .ok_or(ProtocolError::InvalidMessage)?;
-        Ok(Decrypted {
+        let delivered = deliver(Decrypted {
             from,
             plaintext: decrypted.message.into(),
-        })
+        })?;
+        transaction.commit()?;
+        Ok(delivered)
     }
 }
 
@@ -195,6 +245,17 @@ mod tests {
                 kyber_pre_keys: &mut self.kyber_pre_key_store,
             }
         }
+
+        // Em memória não há o que travar nem como desfazer; a atomicidade é testada no SQLite.
+        fn begin(&mut self) -> Result<(), ProtocolError> {
+            Ok(())
+        }
+
+        fn commit(&mut self) -> Result<(), ProtocolError> {
+            Ok(())
+        }
+
+        fn rollback(&mut self) {}
     }
 
     fn now_millis() -> Result<u64, Box<dyn Error>> {
@@ -266,7 +327,11 @@ mod tests {
             envelope: &Ciphertext,
             server_timestamp: u64,
         ) -> Result<Result<Decrypted, ProtocolError>, Box<dyn Error>> {
-            Ok(ready(self.sessions.decrypt(envelope, server_timestamp))?)
+            Ok(ready(self.sessions.decrypt(
+                envelope,
+                server_timestamp,
+                Ok::<_, ProtocolError>,
+            ))?)
         }
 
         /// Decifra exigindo que o remetente do certificado seja `from`.

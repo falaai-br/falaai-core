@@ -250,6 +250,27 @@ fn entrega_sem_assinante_nao_e_confirmada_e_volta_na_proxima_conexao() -> TestRe
 }
 
 #[test]
+fn entrega_com_stream_fechado_nao_avanca_o_ratchet_e_a_reentrega_abre() -> TestResult {
+    let mut world = World::new()?;
+    world.bob.close_events();
+
+    world.alice_sends(b"segura")?;
+    world.server.wait_delivered(1)?;
+    std::thread::sleep(Duration::from_millis(500));
+    assert!(world.server.acked().is_empty());
+
+    // Com o ratchet avançado, a reentrega daria DuplicateMessage e seria confirmada e perdida.
+    world.bob.subscribe();
+    world
+        .bob
+        .core()
+        .connect(world.server.config(), token(&world.bob))?;
+    world.bob_receives(b"segura")?;
+    world.server.wait_acked(1)?;
+    Ok(())
+}
+
+#[test]
 fn certificado_de_remetente_vem_do_accounts() -> TestResult {
     let world = World::new()?;
     let certificate = world.alice.core().fetch_sender_certificate()?;

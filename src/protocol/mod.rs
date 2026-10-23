@@ -32,7 +32,9 @@ pub(crate) type Plaintext = Zeroizing<Vec<u8>>;
 /// Sessões 1:1 do Signal Protocol: PQXDH para abrir, Triple Ratchet para cada mensagem e sealed
 /// sender por fora.
 pub(crate) trait Sessions {
-    /// Abre sessão com `peer` a partir do bundle de pré-chaves publicado por ele.
+    /// Abre sessão com `peer` a partir do bundle de pré-chaves publicado por ele. Como
+    /// [`Self::encrypt`] e [`Self::decrypt`], roda numa transação, com o ratchet preso contra
+    /// outros processos.
     async fn start_session(
         &mut self,
         peer: &Address,
@@ -53,13 +55,18 @@ pub(crate) trait Sessions {
     ) -> Result<Ciphertext, ProtocolError>;
 
     /// Abre o selo, valida o certificado de remetente no instante `server_timestamp`
-    /// (milissegundos desde a época Unix) e decifra. A primeira mensagem de uma sessão abre a
-    /// sessão do lado de quem recebe.
-    async fn decrypt(
+    /// (milissegundos desde a época Unix), decifra e passa a mensagem a `deliver`. A primeira
+    /// mensagem de uma sessão abre a sessão do lado de quem recebe.
+    ///
+    /// Tudo roda numa transação, com o ratchet preso contra outros processos, e `deliver` roda
+    /// antes de ela ser confirmada: se `deliver` falha, o ratchet volta ao estado anterior e o
+    /// mesmo envelope pode ser decifrado de novo.
+    async fn decrypt<T, E: From<ProtocolError>>(
         &mut self,
         envelope: &Ciphertext,
         server_timestamp: u64,
-    ) -> Result<Decrypted, ProtocolError>;
+        deliver: impl FnOnce(Decrypted) -> Result<T, E>,
+    ) -> Result<T, E>;
 }
 
 /// Mensagem decifrada e o dispositivo que a enviou, tirado do certificado de remetente. Sem
