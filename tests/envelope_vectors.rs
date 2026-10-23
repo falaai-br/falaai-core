@@ -7,7 +7,7 @@
 //!
 //! Os ciphertexts são aleatórios, então os arquivos versionados só mudam quando regerados de
 //! propósito, com `make vectors`. No resto do tempo o teste confere os arquivos versionados e
-//! que o gerador ainda produz o mesmo formato: casos, campos e versão do ciphertext.
+//! que o gerador ainda produz o mesmo formato: casos, campos e versão do selo.
 
 mod common;
 
@@ -17,7 +17,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use common::{Device, TestResult};
-use falaai_core::api::types::{Envelope as CoreEnvelope, EnvelopeKind};
+use falaai_core::api::test_support::SealedKind;
 use prost::Message as _;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -29,13 +29,11 @@ const UPDATE: &str = "FALAAI_UPDATE_VECTORS";
 /// Schema espelhado em [`proto`].
 const PROTO_SOURCE: &str = "github.com/falaai-br/falaai-proto@57fa36c proto/falaai/v1";
 
-/// O que vai em `Envelope.content`. Sem sealed sender ainda, é o ciphertext da libsignal como
-/// o core devolve (`PreKeySignalMessage` ou `SignalMessage`). A `PreKeySignalMessage` leva em
-/// claro a identidade pública do remetente e o ACI e o device id dos dois lados (campo
-/// `addresses`, amarrado ao MAC), por isso o teste só exige ausência do remetente fora do
-/// `content`. Com o sealed sender passa a ser a `UnidentifiedSenderMessage`, e a exigência cobre
-/// os bytes inteiros.
-const CONTENT_FORMAT: &str = "libsignal-ciphertext";
+/// O que vai em `Envelope.content`: a `UnidentifiedSenderMessage` (sealed sender v1) da
+/// libsignal, como o core devolve. O remetente só aparece dentro do selo, então o teste exige
+/// ausência do remetente nos bytes inteiros, `content` incluído, e ausência do destinatário
+/// dentro do `content`.
+const CONTENT_FORMAT: &str = "sealed-sender";
 
 /// `server_timestamp` dos `Deliver`: 2026-01-01T00:00:00Z.
 const SERVER_TIMESTAMP: u64 = 1_767_225_600_000;
@@ -163,7 +161,7 @@ struct Vectors {
 }
 
 /// Alice abre sessão com Bob e manda um envelope por caso. Bob decifra todos, o que garante que
-/// são ciphertexts válidos, e responde depois do primeiro para confirmar a sessão.
+/// são envelopes selados válidos, e responde depois do primeiro para confirmar a sessão.
 fn generate() -> Result<Vectors, Box<dyn Error>> {
     let dir = tempfile::tempdir()?;
     let alice = Device::register(dir.path(), SENDER_SEED)?;
@@ -176,7 +174,7 @@ fn generate() -> Result<Vectors, Box<dyn Error>> {
     for (index, case) in CASES.iter().enumerate() {
         let ciphertext = alice.send(&bob, case.plaintext)?;
         assert_eq!(
-            ciphertext.kind == EnvelopeKind::PreKey,
+            bob.kind(&ciphertext)? == SealedKind::PreKey,
             index == 0,
             "{}",
             case.name
@@ -227,8 +225,7 @@ fn generate() -> Result<Vectors, Box<dyn Error>> {
             "description": case.description,
             "envelope_type": case.envelope_type.proto_name(),
             "content_format": CONTENT_FORMAT,
-            "ciphertext_kind": kind_name(&ciphertext),
-            "ciphertext_version": ciphertext.body.first().ok_or("ciphertext vazio")?,
+            "content_version": ciphertext.body.first().ok_or("envelope vazio")?,
             "client_message_id": hex(&envelope.client_message_id),
             "destination_aci": bob.address.aci,
             "destination_device_id": bob.address.device_id,
@@ -250,13 +247,6 @@ fn generate() -> Result<Vectors, Box<dyn Error>> {
 /// muda de verdade.
 fn client_message_id(seq: u64) -> [u8; 16] {
     Uuid::from_u128(0x0000_0000_0000_4000_8000_0000_0000_0000 | u128::from(seq)).into_bytes()
-}
-
-fn kind_name(ciphertext: &CoreEnvelope) -> &'static str {
-    match ciphertext.kind {
-        EnvelopeKind::PreKey => "prekey",
-        EnvelopeKind::Message => "message",
-    }
 }
 
 fn sha256(bytes: &[u8]) -> String {
@@ -315,17 +305,22 @@ fn decode<M: prost::Message + Default>(bytes: &[u8]) -> Result<M, Box<dyn Error>
     Ok(message)
 }
 
-/// Falha se `message` carrega o ACI do remetente, em texto ou nos 16 bytes do UUID.
-fn assert_no_sender(message: &impl prost::Message, case: &str) -> TestResult {
-    let aci = common::aci(SENDER_SEED);
-    let bytes = message.encode_to_vec();
+/// Falha se `bytes` carregam o ACI de `seed`, em texto ou nos 16 bytes do UUID.
+fn assert_no_aci(bytes: &[u8], seed: u8, what: &str) -> TestResult {
+    let aci = common::aci(seed);
     for needle in [aci.as_bytes(), &Uuid::parse_str(&aci)?.into_bytes()[..]] {
-        assert!(
-            !bytes.windows(needle.len()).any(|w| w == needle),
-            "{case}: remetente fora do `content`"
-        );
+        assert!(!bytes.windows(needle.len()).any(|w| w == needle), "{what}");
     }
     Ok(())
+}
+
+/// Falha se `message` carrega o ACI do remetente, inclusive dentro do `content`.
+fn assert_no_sender(message: &impl prost::Message, case: &str) -> TestResult {
+    assert_no_aci(
+        &message.encode_to_vec(),
+        SENDER_SEED,
+        &format!("{case}: remetente em claro"),
+    )
 }
 
 /// Confere a consistência de um conjunto de vetores; `read` lê um arquivo pelo nome.
@@ -350,12 +345,11 @@ fn check(manifest: &Value, read: impl Fn(&str) -> Result<Vec<u8>, Box<dyn Error>
 
         let envelope: proto::Envelope = decode(envelope_bytes)?;
         assert_eq!(str_field(case, "content_format")?, CONTENT_FORMAT, "{name}");
-        assert_no_sender(
-            &proto::Envelope {
-                content: Vec::new(),
-                ..envelope.clone()
-            },
-            name,
+        assert_no_sender(&envelope, name)?;
+        assert_no_aci(
+            &envelope.content,
+            RECIPIENT_SEED,
+            &format!("{name}: destinatário em claro no `content`"),
         )?;
         assert_eq!(
             EnvelopeType::try_from(envelope.r#type)?.proto_name(),
@@ -369,7 +363,7 @@ fn check(manifest: &Value, read: impl Fn(&str) -> Result<Vec<u8>, Box<dyn Error>
         assert_eq!(envelope.client_message_id.len(), 16, "{name}");
         assert_eq!(
             envelope.content.first().map(|&b| u64::from(b)),
-            Some(u64_field(case, "ciphertext_version")?),
+            Some(u64_field(case, "content_version")?),
             "{name}"
         );
 
@@ -377,13 +371,7 @@ fn check(manifest: &Value, read: impl Fn(&str) -> Result<Vec<u8>, Box<dyn Error>
             Some(proto::Payload::Send(send)) => send,
             _ => return Err(format!("{name}.send não é Frame.send").into()),
         };
-        assert_no_sender(
-            &proto::Send {
-                envelope: None,
-                ..send.clone()
-            },
-            name,
-        )?;
+        assert_no_sender(&send, name)?;
         assert_eq!(
             Uuid::from_slice(&send.destination_aci)?.to_string(),
             str_field(case, "destination_aci")?
@@ -403,13 +391,7 @@ fn check(manifest: &Value, read: impl Fn(&str) -> Result<Vec<u8>, Box<dyn Error>
                 Some(proto::Payload::Deliver(deliver)) => deliver,
                 _ => return Err(format!("{name}.deliver não é Frame.deliver").into()),
             };
-        assert_no_sender(
-            &proto::Deliver {
-                envelope: None,
-                ..deliver.clone()
-            },
-            name,
-        )?;
+        assert_no_sender(&deliver, name)?;
         assert_eq!(deliver.seq, u64_field(case, "seq")?);
         assert_eq!(
             deliver.server_timestamp,

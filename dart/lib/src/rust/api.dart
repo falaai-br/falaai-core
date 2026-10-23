@@ -12,16 +12,19 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<FalaaiCore>>
 abstract class FalaaiCore implements RustOpaqueInterface {
-  /// Decifra um envelope de `peer` e entrega o texto no stream de [`Self::events`] como
-  /// [`ChatEvent::MessageReceived`]. `Ok` quer dizer que o evento foi entregue e o envelope
-  /// pode ser confirmado ao servidor. Sem assinante, falha com [`CoreError::NoEventListener`]
-  /// antes de tocar no ratchet.
+  /// Abre e decifra um envelope selado e entrega o texto, com o remetente tirado do certificado,
+  /// no stream de [`Self::events`] como [`ChatEvent::MessageReceived`]. `server_timestamp` é o
+  /// do `Deliver` (milissegundos desde a época Unix): o certificado de remetente tem de valer
+  /// nesse instante, então uma mensagem que esperou na fila ainda abre. `Ok` quer dizer que o
+  /// evento foi entregue e o envelope pode ser confirmado ao servidor. Sem assinante, falha com
+  /// [`CoreError::NoEventListener`] antes de tocar no ratchet.
   Future<void> decrypt({
-    required DeviceAddress peer,
     required Envelope envelope,
+    required BigInt serverTimestamp,
   });
 
-  /// Cifra `plaintext` para `peer`. Exige sessão aberta.
+  /// Cifra `plaintext` para `peer` e sela com o certificado de remetente; o resultado vai em
+  /// `Envelope.content`. Exige sessão aberta e certificado de remetente válido.
   Future<Envelope> encrypt({
     required DeviceAddress peer,
     required List<int> plaintext,
@@ -36,13 +39,17 @@ abstract class FalaaiCore implements RustOpaqueInterface {
   Future<AccountKeys> generateAccountKeys();
 
   /// Abre (ou cria) o banco local em `db_path` com a chave de 32 bytes guardada pela
-  /// plataforma.
+  /// plataforma. `trust_root` é a chave pública raiz do servidor, da configuração do app
+  /// (33 bytes, formato da libsignal): só certificados de remetente que encadeiam até ela são
+  /// aceitos.
   static Future<FalaaiCore> open({
     required String dbPath,
     required List<int> dbKey,
+    required List<int> trustRoot,
   }) => FalaaiCoreLib.instance.api.crateApiFalaaiCoreOpen(
     dbPath: dbPath,
     dbKey: dbKey,
+    trustRoot: trustRoot,
   );
 
   /// Abre sessão com `peer` a partir do bundle de pré-chaves que ele publicou (PQXDH).
@@ -55,4 +62,11 @@ abstract class FalaaiCore implements RustOpaqueInterface {
   /// sessões. Exige [`Self::generate_account_keys`] antes; repetir o mesmo endereço não muda
   /// nada.
   Future<void> setLocalAddress({required DeviceAddress address});
+
+  /// Entrega o certificado de remetente que o `accounts` emitiu para este dispositivo. Ele vale
+  /// pouco tempo (24h) e fica só em memória: o app o guarda, entrega de novo ao abrir o núcleo e
+  /// pede outro quando [`Self::encrypt`] falhar com [`CoreError::NoSenderCertificate`]. Falha
+  /// com [`CoreError::InvalidSenderCertificate`] se o certificado não encadeia até o trust
+  /// root, já venceu ou é de outro dispositivo ou identidade.
+  Future<void> setSenderCertificate({required List<int> certificate});
 }

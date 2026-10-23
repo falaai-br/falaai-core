@@ -82,9 +82,6 @@ abstract class FalaaiCoreLibApiImplPlatform
   Envelope dco_decode_envelope(dynamic raw);
 
   @protected
-  EnvelopeKind dco_decode_envelope_kind(dynamic raw);
-
-  @protected
   int dco_decode_i_32(dynamic raw);
 
   @protected
@@ -113,6 +110,9 @@ abstract class FalaaiCoreLibApiImplPlatform
 
   @protected
   int dco_decode_u_32(dynamic raw);
+
+  @protected
+  BigInt dco_decode_u_64(dynamic raw);
 
   @protected
   int dco_decode_u_8(dynamic raw);
@@ -184,9 +184,6 @@ abstract class FalaaiCoreLibApiImplPlatform
   Envelope sse_decode_envelope(SseDeserializer deserializer);
 
   @protected
-  EnvelopeKind sse_decode_envelope_kind(SseDeserializer deserializer);
-
-  @protected
   int sse_decode_i_32(SseDeserializer deserializer);
 
   @protected
@@ -217,6 +214,9 @@ abstract class FalaaiCoreLibApiImplPlatform
 
   @protected
   int sse_decode_u_32(SseDeserializer deserializer);
+
+  @protected
+  BigInt sse_decode_u_64(SseDeserializer deserializer);
 
   @protected
   int sse_decode_u_8(SseDeserializer deserializer);
@@ -300,9 +300,6 @@ abstract class FalaaiCoreLibApiImplPlatform
   void sse_encode_envelope(Envelope self, SseSerializer serializer);
 
   @protected
-  void sse_encode_envelope_kind(EnvelopeKind self, SseSerializer serializer);
-
-  @protected
   void sse_encode_i_32(int self, SseSerializer serializer);
 
   @protected
@@ -340,6 +337,9 @@ abstract class FalaaiCoreLibApiImplPlatform
 
   @protected
   void sse_encode_u_32(int self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_u_64(BigInt self, SseSerializer serializer);
 
   @protected
   void sse_encode_u_8(int self, SseSerializer serializer);

@@ -9,7 +9,7 @@ import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
 part 'types.freezed.dart';
 
 // These functions are ignored because they are not marked as `pub`: `to_protocol`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `try_from`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `try_from`
 
 /// Parte pública das chaves da conta, para enviar ao servidor no registro.
 class AccountKeys {
@@ -68,7 +68,7 @@ sealed class ChatEvent with _$ChatEvent {
 
   /// Mensagem decifrada de um contato.
   const factory ChatEvent.messageReceived({
-    /// Dispositivo que enviou.
+    /// Dispositivo que enviou, conforme o certificado de remetente.
     required DeviceAddress from,
 
     /// Texto decifrado.
@@ -100,35 +100,24 @@ class DeviceAddress {
           deviceId == other.deviceId;
 }
 
-/// Mensagem cifrada, pronta para o transporte.
+/// Mensagem selada (sealed sender), pronta para o transporte: vai em `Envelope.content` do
+/// falaai-proto. Só o destinatário a abre; o servidor não vê o remetente nem o tipo da
+/// mensagem dentro do selo.
 class Envelope {
-  /// Tipo do envelope; viaja junto com o corpo.
-  final EnvelopeKind kind;
-
-  /// Bytes cifrados.
+  /// Bytes selados.
   final Uint8List body;
 
-  const Envelope({required this.kind, required this.body});
+  const Envelope({required this.body});
 
   @override
-  int get hashCode => kind.hashCode ^ body.hashCode;
+  int get hashCode => body.hashCode;
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
       other is Envelope &&
           runtimeType == other.runtimeType &&
-          kind == other.kind &&
           body == other.body;
-}
-
-/// Como o destinatário deve decifrar um [`Envelope`].
-enum EnvelopeKind {
-  /// Primeira mensagem de uma sessão ainda não confirmada; carrega o material do PQXDH.
-  preKey,
-
-  /// Mensagem de uma sessão estabelecida.
-  message,
 }
 
 /// Pré-chave pública EC descartável.

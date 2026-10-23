@@ -30,6 +30,13 @@ pub(crate) enum ProtocolError {
     /// Ainda não há chaves da conta, ou falta o endereço local.
     #[error("conta não criada")]
     NoAccount,
+    /// Não há certificado de remetente, ou o que há venceu.
+    #[error("sem certificado de remetente válido")]
+    NoSenderCertificate,
+    /// O certificado de remetente não encadeia até o trust root, venceu ou é de outro
+    /// dispositivo ou identidade.
+    #[error("certificado de remetente inválido")]
+    InvalidSenderCertificate,
     /// Falha devolvida por um store.
     #[error("falha no armazenamento do protocolo")]
     Storage,
@@ -55,7 +62,13 @@ impl From<SignalProtocolError> for ProtocolError {
             | E::InvalidPreKeyId
             | E::InvalidSignedPreKeyId
             | E::InvalidKyberPreKeyId
-            | E::InvalidRegistrationId(..) => Self::InvalidMessage,
+            | E::InvalidRegistrationId(..)
+            // Selo adulterado, de versão desconhecida, com certificado de remetente que não
+            // valida, ou mandado pelo próprio dispositivo.
+            | E::InvalidSealedSenderMessage(_)
+            | E::UnknownSealedSenderVersion(_)
+            | E::UnknownSealedSenderServerCertificateId(_)
+            | E::SealedSenderSelfSend => Self::InvalidMessage,
             E::NoKeyTypeIdentifier
             | E::BadKeyType(_)
             | E::BadKeyLength(..)

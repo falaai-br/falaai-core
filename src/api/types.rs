@@ -26,6 +26,15 @@ impl fmt::Debug for DeviceAddress {
     }
 }
 
+impl From<&Address> for DeviceAddress {
+    fn from(address: &Address) -> Self {
+        Self {
+            aci: address.aci().to_owned(),
+            device_id: address.device_id(),
+        }
+    }
+}
+
 impl TryFrom<&DeviceAddress> for Address {
     type Error = ProtocolError;
 
@@ -153,28 +162,18 @@ impl PreKeyBundle {
     }
 }
 
-/// Como o destinatário deve decifrar um [`Envelope`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum EnvelopeKind {
-    /// Primeira mensagem de uma sessão ainda não confirmada; carrega o material do PQXDH.
-    PreKey,
-    /// Mensagem de uma sessão estabelecida.
-    Message,
-}
-
-/// Mensagem cifrada, pronta para o transporte.
+/// Mensagem selada (sealed sender), pronta para o transporte: vai em `Envelope.content` do
+/// falaai-proto. Só o destinatário a abre; o servidor não vê o remetente nem o tipo da
+/// mensagem dentro do selo.
 #[derive(Clone, PartialEq, Eq)]
 pub struct Envelope {
-    /// Tipo do envelope; viaja junto com o corpo.
-    pub kind: EnvelopeKind,
-    /// Bytes cifrados.
+    /// Bytes selados.
     pub body: Vec<u8>,
 }
 
 impl fmt::Debug for Envelope {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Envelope")
-            .field("kind", &self.kind)
             .field("len", &self.body.len())
             .finish()
     }
@@ -182,12 +181,7 @@ impl fmt::Debug for Envelope {
 
 impl From<protocol::Ciphertext> for Envelope {
     fn from(envelope: protocol::Ciphertext) -> Self {
-        let kind = match envelope.kind() {
-            protocol::CiphertextKind::PreKey => EnvelopeKind::PreKey,
-            protocol::CiphertextKind::Message => EnvelopeKind::Message,
-        };
         Self {
-            kind,
             body: envelope.body().to_vec(),
         }
     }
@@ -195,11 +189,7 @@ impl From<protocol::Ciphertext> for Envelope {
 
 impl From<Envelope> for protocol::Ciphertext {
     fn from(envelope: Envelope) -> Self {
-        let kind = match envelope.kind {
-            EnvelopeKind::PreKey => protocol::CiphertextKind::PreKey,
-            EnvelopeKind::Message => protocol::CiphertextKind::Message,
-        };
-        Self::new(kind, envelope.body)
+        Self::new(envelope.body)
     }
 }
 
@@ -208,7 +198,7 @@ impl From<Envelope> for protocol::Ciphertext {
 pub enum ChatEvent {
     /// Mensagem decifrada de um contato.
     MessageReceived {
-        /// Dispositivo que enviou.
+        /// Dispositivo que enviou, conforme o certificado de remetente.
         from: DeviceAddress,
         /// Texto decifrado.
         body: Vec<u8>,

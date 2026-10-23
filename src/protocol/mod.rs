@@ -4,7 +4,11 @@
 //! trait [`Sessions`] e dos tipos daqui, que não expõem tipos da libsignal; o storage entra
 //! pela trait [`signal::SignalStores`], implementada sobre o banco local em [`store`]. Um
 //! upgrade da libsignal que quebre a API fica contido aqui.
+//!
+//! Toda mensagem sai selada (sealed sender): o remetente só aparece dentro do selo, que só o
+//! destinatário abre, junto com o certificado de remetente emitido pelo servidor.
 
+pub(crate) mod certificate;
 mod error;
 pub(crate) mod keys;
 pub(crate) mod signal;
@@ -24,7 +28,8 @@ pub(crate) use error::ProtocolError;
 /// Texto claro decifrado; zerado da memória ao sair de escopo.
 pub(crate) type Plaintext = Zeroizing<Vec<u8>>;
 
-/// Sessões 1:1 do Signal Protocol: PQXDH para abrir, Triple Ratchet para cada mensagem.
+/// Sessões 1:1 do Signal Protocol: PQXDH para abrir, Triple Ratchet para cada mensagem e sealed
+/// sender por fora.
 pub(crate) trait Sessions {
     /// Abre sessão com `peer` a partir do bundle de pré-chaves publicado por ele.
     async fn start_session(
@@ -33,20 +38,34 @@ pub(crate) trait Sessions {
         bundle: &PeerBundle,
     ) -> Result<(), ProtocolError>;
 
-    /// Cifra `plaintext` para `peer`. Exige sessão aberta.
+    /// Guarda o certificado de remetente que o servidor emitiu para o dispositivo local. Falha
+    /// com [`ProtocolError::InvalidSenderCertificate`] se não encadeia até o trust root, já
+    /// venceu ou é de outro dispositivo ou identidade.
+    async fn set_sender_certificate(&mut self, certificate: &[u8]) -> Result<(), ProtocolError>;
+
+    /// Cifra `plaintext` para `peer` e sela com o certificado de remetente. Exige sessão aberta e
+    /// certificado válido ([`ProtocolError::NoSenderCertificate`]).
     async fn encrypt(
         &mut self,
         peer: &Address,
         plaintext: &[u8],
     ) -> Result<Ciphertext, ProtocolError>;
 
-    /// Decifra um envelope de `peer`. Um envelope [`CiphertextKind::PreKey`] abre a sessão do
-    /// lado de quem recebe.
+    /// Abre o selo, valida o certificado de remetente no instante `server_timestamp`
+    /// (milissegundos desde a época Unix) e decifra. A primeira mensagem de uma sessão abre a
+    /// sessão do lado de quem recebe.
     async fn decrypt(
         &mut self,
-        peer: &Address,
         envelope: &Ciphertext,
-    ) -> Result<Plaintext, ProtocolError>;
+        server_timestamp: u64,
+    ) -> Result<Decrypted, ProtocolError>;
+}
+
+/// Mensagem decifrada e o dispositivo que a enviou, tirado do certificado de remetente. Sem
+/// `Debug`: o texto claro não pode ir para log.
+pub(crate) struct Decrypted {
+    pub(crate) from: Address,
+    pub(crate) plaintext: Plaintext,
 }
 
 /// Dispositivo de uma conta: ACI e device id.
@@ -64,6 +83,16 @@ impl Address {
             aci.service_id_string(),
             device_id,
         )))
+    }
+
+    /// ACI na forma textual do service id.
+    pub(crate) fn aci(&self) -> &str {
+        self.0.name()
+    }
+
+    /// Device id, de 1 a 127.
+    pub(crate) fn device_id(&self) -> u8 {
+        self.0.device_id().into()
     }
 }
 
@@ -127,46 +156,40 @@ impl PeerBundle {
     }
 }
 
-/// Como o destinatário deve decifrar um [`Ciphertext`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum CiphertextKind {
-    /// Primeira mensagem de uma sessão ainda não confirmada; carrega o material do PQXDH.
-    PreKey,
-    /// Mensagem de uma sessão estabelecida.
-    Message,
-}
-
-/// Mensagem cifrada pronta para o transporte.
+/// Mensagem selada pronta para o transporte: uma `UnidentifiedSenderMessage` da libsignal. Só o
+/// destinatário a abre; para o servidor é opaca e não revela o remetente.
 #[derive(Clone, PartialEq, Eq)]
-pub(crate) struct Ciphertext {
-    kind: CiphertextKind,
-    body: Vec<u8>,
-}
+pub(crate) struct Ciphertext(Vec<u8>);
 
 impl Ciphertext {
     /// Remonta um envelope recebido do transporte.
-    pub(crate) fn new(kind: CiphertextKind, body: Vec<u8>) -> Self {
-        Self { kind, body }
+    pub(crate) fn new(body: Vec<u8>) -> Self {
+        Self(body)
     }
 
-    /// Tipo do envelope.
-    pub(crate) fn kind(&self) -> CiphertextKind {
-        self.kind
-    }
-
-    /// Bytes cifrados, no formato da libsignal.
+    /// Bytes selados, no formato da libsignal.
     pub(crate) fn body(&self) -> &[u8] {
-        &self.body
+        &self.0
     }
 }
 
 impl fmt::Debug for Ciphertext {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Ciphertext")
-            .field("kind", &self.kind)
-            .field("len", &self.body.len())
+            .field("len", &self.0.len())
             .finish()
     }
+}
+
+/// Tipo da mensagem dentro do selo. Só os testes olham: o destinatário não precisa, e o
+/// servidor não tem como ver.
+#[cfg(any(test, feature = "test-support"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CiphertextKind {
+    /// Primeira mensagem de uma sessão ainda não confirmada; carrega o material do PQXDH.
+    PreKey,
+    /// Mensagem de uma sessão estabelecida.
+    Message,
 }
 
 #[cfg(test)]
@@ -215,10 +238,7 @@ mod tests {
 
     #[test]
     fn debug_do_envelope_omite_os_bytes() {
-        let debug = format!(
-            "{:?}",
-            Ciphertext::new(CiphertextKind::Message, vec![0xAB; 4])
-        );
-        assert_eq!(debug, "Ciphertext { kind: Message, len: 4 }");
+        let debug = format!("{:?}", Ciphertext::new(vec![0xAB; 4]));
+        assert_eq!(debug, "Ciphertext { len: 4 }");
     }
 }

@@ -14,7 +14,7 @@ T _$identity<T>(T value) => value;
 /// @nodoc
 mixin _$ChatEvent {
 
-/// Dispositivo que enviou.
+/// Dispositivo que enviou, conforme o certificado de remetente.
  DeviceAddress get from;/// Texto decifrado.
  Uint8List get body;
 /// Create a copy of ChatEvent
@@ -206,7 +206,7 @@ class ChatEvent_MessageReceived extends ChatEvent {
   const ChatEvent_MessageReceived({required this.from, required this.body}): super._();
   
 
-/// Dispositivo que enviou.
+/// Dispositivo que enviou, conforme o certificado de remetente.
 @override final  DeviceAddress from;
 /// Texto decifrado.
 @override final  Uint8List body;

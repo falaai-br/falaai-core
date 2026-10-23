@@ -1,5 +1,5 @@
 //! Dois cores no mesmo processo, cada um no seu banco SQLCipher, trocando mensagens pela API
-//! pública: PQXDH para abrir a sessão e Triple Ratchet a cada mensagem.
+//! pública: PQXDH para abrir a sessão, Triple Ratchet a cada mensagem e sealed sender por fora.
 //!
 //! A entrega do servidor é at-least-once e a ordem não é garantida (03-backend-e-infra): os
 //! cenários cobrem mensagens fora de ordem, atrasadas de uma cadeia anterior e duplicadas. Uma
@@ -12,7 +12,8 @@ use std::error::Error;
 
 use common::{Device, TestResult};
 use falaai_core::api::error::CoreError;
-use falaai_core::api::types::{Envelope, EnvelopeKind};
+use falaai_core::api::test_support::SealedKind;
+use falaai_core::api::types::Envelope;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
@@ -49,19 +50,19 @@ fn pqxdh_abre_sessao_e_conversa_nos_dois_sentidos() -> TestResult {
     let (alice, bob) = alice_and_bob(&dir)?;
 
     let first = alice.send(&bob, b"oi, bob")?;
-    assert_eq!(first.kind, EnvelopeKind::PreKey);
+    assert_eq!(bob.kind(&first)?, SealedKind::PreKey);
     assert_eq!(bob.receive(&alice, first)?, b"oi, bob");
 
     // Cada troca de sentido gira o ratchet; nenhuma mensagem depois da resposta é PreKey.
     for round in 0..5 {
         let from_bob = format!("bob, rodada {round}").into_bytes();
         let reply = bob.send(&alice, &from_bob)?;
-        assert_eq!(reply.kind, EnvelopeKind::Message);
+        assert_eq!(alice.kind(&reply)?, SealedKind::Message);
         assert_eq!(alice.receive(&bob, reply)?, from_bob);
 
         let from_alice = format!("alice, rodada {round}").into_bytes();
         let next = alice.send(&bob, &from_alice)?;
-        assert_eq!(next.kind, EnvelopeKind::Message);
+        assert_eq!(bob.kind(&next)?, SealedKind::Message);
         assert_eq!(bob.receive(&alice, next)?, from_alice);
     }
     Ok(())
@@ -87,14 +88,19 @@ fn prekey_messages_fora_de_ordem() -> TestResult {
     // Sem resposta de Bob, todas carregam o material do PQXDH.
     let texts = texts("alice", 3);
     let envelopes = send_all(&alice, &bob, &texts)?;
-    assert!(envelopes.iter().all(|e| e.kind == EnvelopeKind::PreKey));
+    for envelope in &envelopes {
+        assert_eq!(bob.kind(envelope)?, SealedKind::PreKey);
+    }
 
     for index in [2, 0, 1] {
         assert_eq!(bob.receive(&alice, envelopes[index].clone())?, texts[index]);
     }
     let reply = bob.send(&alice, b"recebi as tres")?;
     assert_eq!(alice.receive(&bob, reply)?, b"recebi as tres");
-    assert_eq!(alice.send(&bob, b"depois")?.kind, EnvelopeKind::Message);
+    assert_eq!(
+        bob.kind(&alice.send(&bob, b"depois")?)?,
+        SealedKind::Message
+    );
     Ok(())
 }
 

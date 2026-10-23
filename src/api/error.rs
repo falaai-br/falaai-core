@@ -30,7 +30,7 @@ pub enum CoreError {
     /// ACI ou device id inválido.
     #[error("endereço inválido")]
     InvalidAddress,
-    /// Chave pública malformada ou assinatura inválida no bundle.
+    /// Chave pública malformada ou assinatura inválida no bundle, ou trust root malformado.
     #[error("chave inválida")]
     InvalidKey,
     /// Não há sessão com o dispositivo remoto: buscar o bundle e chamar `process_prekey_bundle`.
@@ -42,9 +42,18 @@ pub enum CoreError {
     /// Envelope já decifrado antes.
     #[error("mensagem duplicada")]
     DuplicateMessage,
-    /// Envelope malformado, adulterado ou que referencia pré-chave inexistente.
+    /// Envelope malformado, adulterado, com certificado de remetente que não valida ou que
+    /// referencia pré-chave inexistente.
     #[error("mensagem inválida")]
     InvalidMessage,
+    /// Sem certificado de remetente, ou o que há venceu: pedir um novo ao servidor e entregar
+    /// com `set_sender_certificate`.
+    #[error("sem certificado de remetente válido")]
+    NoSenderCertificate,
+    /// O certificado de remetente não encadeia até o trust root, venceu ou é de outro
+    /// dispositivo ou identidade.
+    #[error("certificado de remetente inválido")]
+    InvalidSenderCertificate,
     /// Ninguém ouve o stream de eventos, então a mensagem decifrada não teria para onde ir.
     #[error("sem assinante do stream de eventos")]
     NoEventListener,
@@ -64,6 +73,8 @@ impl From<ProtocolError> for CoreError {
             ProtocolError::InvalidKey => Self::InvalidKey,
             ProtocolError::AccountExists => Self::AccountExists,
             ProtocolError::NoAccount => Self::NoAccount,
+            ProtocolError::NoSenderCertificate => Self::NoSenderCertificate,
+            ProtocolError::InvalidSenderCertificate => Self::InvalidSenderCertificate,
             ProtocolError::Storage => Self::Storage,
             ProtocolError::Internal => Self::Internal,
         }

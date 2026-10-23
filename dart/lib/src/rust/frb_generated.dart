@@ -72,7 +72,7 @@ class FalaaiCoreLib
   String get codegenVersion => '2.13.0';
 
   @override
-  int get rustContentHash => -1883602431;
+  int get rustContentHash => 207922590;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -86,8 +86,8 @@ class FalaaiCoreLib
 abstract class FalaaiCoreLibApi extends BaseApi {
   Future<void> crateApiFalaaiCoreDecrypt({
     required FalaaiCore that,
-    required DeviceAddress peer,
     required Envelope envelope,
+    required BigInt serverTimestamp,
   });
 
   Future<Envelope> crateApiFalaaiCoreEncrypt({
@@ -105,6 +105,7 @@ abstract class FalaaiCoreLibApi extends BaseApi {
   Future<FalaaiCore> crateApiFalaaiCoreOpen({
     required String dbPath,
     required List<int> dbKey,
+    required List<int> trustRoot,
   });
 
   Future<void> crateApiFalaaiCoreProcessPrekeyBundle({
@@ -116,6 +117,11 @@ abstract class FalaaiCoreLibApi extends BaseApi {
   Future<void> crateApiFalaaiCoreSetLocalAddress({
     required FalaaiCore that,
     required DeviceAddress address,
+  });
+
+  Future<void> crateApiFalaaiCoreSetSenderCertificate({
+    required FalaaiCore that,
+    required List<int> certificate,
   });
 
   RustArcIncrementStrongCountFnType
@@ -139,8 +145,8 @@ class FalaaiCoreLibApiImpl extends FalaaiCoreLibApiImplPlatform
   @override
   Future<void> crateApiFalaaiCoreDecrypt({
     required FalaaiCore that,
-    required DeviceAddress peer,
     required Envelope envelope,
+    required BigInt serverTimestamp,
   }) {
     return handler.executeNormal(
       NormalTask(
@@ -150,8 +156,8 @@ class FalaaiCoreLibApiImpl extends FalaaiCoreLibApiImplPlatform
             that,
             serializer,
           );
-          sse_encode_box_autoadd_device_address(peer, serializer);
           sse_encode_box_autoadd_envelope(envelope, serializer);
+          sse_encode_u_64(serverTimestamp, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
@@ -164,7 +170,7 @@ class FalaaiCoreLibApiImpl extends FalaaiCoreLibApiImplPlatform
           decodeErrorData: sse_decode_core_error,
         ),
         constMeta: kCrateApiFalaaiCoreDecryptConstMeta,
-        argValues: [that, peer, envelope],
+        argValues: [that, envelope, serverTimestamp],
         apiImpl: this,
       ),
     );
@@ -172,7 +178,7 @@ class FalaaiCoreLibApiImpl extends FalaaiCoreLibApiImplPlatform
 
   TaskConstMeta get kCrateApiFalaaiCoreDecryptConstMeta => const TaskConstMeta(
     debugName: "FalaaiCore_decrypt",
-    argNames: ["that", "peer", "envelope"],
+    argNames: ["that", "envelope", "serverTimestamp"],
   );
 
   @override
@@ -292,6 +298,7 @@ class FalaaiCoreLibApiImpl extends FalaaiCoreLibApiImplPlatform
   Future<FalaaiCore> crateApiFalaaiCoreOpen({
     required String dbPath,
     required List<int> dbKey,
+    required List<int> trustRoot,
   }) {
     return handler.executeNormal(
       NormalTask(
@@ -299,6 +306,7 @@ class FalaaiCoreLibApiImpl extends FalaaiCoreLibApiImplPlatform
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_String(dbPath, serializer);
           sse_encode_list_prim_u_8_loose(dbKey, serializer);
+          sse_encode_list_prim_u_8_loose(trustRoot, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
@@ -312,7 +320,7 @@ class FalaaiCoreLibApiImpl extends FalaaiCoreLibApiImplPlatform
           decodeErrorData: sse_decode_core_error,
         ),
         constMeta: kCrateApiFalaaiCoreOpenConstMeta,
-        argValues: [dbPath, dbKey],
+        argValues: [dbPath, dbKey, trustRoot],
         apiImpl: this,
       ),
     );
@@ -320,7 +328,7 @@ class FalaaiCoreLibApiImpl extends FalaaiCoreLibApiImplPlatform
 
   TaskConstMeta get kCrateApiFalaaiCoreOpenConstMeta => const TaskConstMeta(
     debugName: "FalaaiCore_open",
-    argNames: ["dbPath", "dbKey"],
+    argNames: ["dbPath", "dbKey", "trustRoot"],
   );
 
   @override
@@ -399,6 +407,44 @@ class FalaaiCoreLibApiImpl extends FalaaiCoreLibApiImplPlatform
       const TaskConstMeta(
         debugName: "FalaaiCore_set_local_address",
         argNames: ["that", "address"],
+      );
+
+  @override
+  Future<void> crateApiFalaaiCoreSetSenderCertificate({
+    required FalaaiCore that,
+    required List<int> certificate,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFalaaiCore(
+            that,
+            serializer,
+          );
+          sse_encode_list_prim_u_8_loose(certificate, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 8,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_core_error,
+        ),
+        constMeta: kCrateApiFalaaiCoreSetSenderCertificateConstMeta,
+        argValues: [that, certificate],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiFalaaiCoreSetSenderCertificateConstMeta =>
+      const TaskConstMeta(
+        debugName: "FalaaiCore_set_sender_certificate",
+        argNames: ["that", "certificate"],
       );
 
   RustArcIncrementStrongCountFnType
@@ -530,18 +576,9 @@ class FalaaiCoreLibApiImpl extends FalaaiCoreLibApiImplPlatform
   Envelope dco_decode_envelope(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 2)
-      throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
-    return Envelope(
-      kind: dco_decode_envelope_kind(arr[0]),
-      body: dco_decode_list_prim_u_8_strict(arr[1]),
-    );
-  }
-
-  @protected
-  EnvelopeKind dco_decode_envelope_kind(dynamic raw) {
-    // Codec=Dco (DartCObject based), see doc to use other codecs
-    return EnvelopeKind.values[raw as int];
+    if (arr.length != 1)
+      throw Exception('unexpected arr length: expect 1 but see ${arr.length}');
+    return Envelope(body: dco_decode_list_prim_u_8_strict(arr[0]));
   }
 
   @protected
@@ -624,6 +661,12 @@ class FalaaiCoreLibApiImpl extends FalaaiCoreLibApiImplPlatform
   int dco_decode_u_32(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw as int;
+  }
+
+  @protected
+  BigInt dco_decode_u_64(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return dcoDecodeU64(raw);
   }
 
   @protected
@@ -782,16 +825,8 @@ class FalaaiCoreLibApiImpl extends FalaaiCoreLibApiImplPlatform
   @protected
   Envelope sse_decode_envelope(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    var var_kind = sse_decode_envelope_kind(deserializer);
     var var_body = sse_decode_list_prim_u_8_strict(deserializer);
-    return Envelope(kind: var_kind, body: var_body);
-  }
-
-  @protected
-  EnvelopeKind sse_decode_envelope_kind(SseDeserializer deserializer) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    var inner = sse_decode_i_32(deserializer);
-    return EnvelopeKind.values[inner];
+    return Envelope(body: var_body);
   }
 
   @protected
@@ -893,6 +928,12 @@ class FalaaiCoreLibApiImpl extends FalaaiCoreLibApiImplPlatform
   int sse_decode_u_32(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return deserializer.buffer.getUint32();
+  }
+
+  @protected
+  BigInt sse_decode_u_64(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return deserializer.buffer.getBigUint64();
   }
 
   @protected
@@ -1060,14 +1101,7 @@ class FalaaiCoreLibApiImpl extends FalaaiCoreLibApiImplPlatform
   @protected
   void sse_encode_envelope(Envelope self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    sse_encode_envelope_kind(self.kind, serializer);
     sse_encode_list_prim_u_8_strict(self.body, serializer);
-  }
-
-  @protected
-  void sse_encode_envelope_kind(EnvelopeKind self, SseSerializer serializer) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    sse_encode_i_32(self.index, serializer);
   }
 
   @protected
@@ -1164,6 +1198,12 @@ class FalaaiCoreLibApiImpl extends FalaaiCoreLibApiImplPlatform
   }
 
   @protected
+  void sse_encode_u_64(BigInt self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    serializer.buffer.putBigUint64(self);
+  }
+
+  @protected
   void sse_encode_u_8(int self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     serializer.buffer.putUint8(self);
@@ -1208,20 +1248,23 @@ class FalaaiCoreImpl extends RustOpaque implements FalaaiCore {
         .rust_arc_decrement_strong_count_FalaaiCorePtr,
   );
 
-  /// Decifra um envelope de `peer` e entrega o texto no stream de [`Self::events`] como
-  /// [`ChatEvent::MessageReceived`]. `Ok` quer dizer que o evento foi entregue e o envelope
-  /// pode ser confirmado ao servidor. Sem assinante, falha com [`CoreError::NoEventListener`]
-  /// antes de tocar no ratchet.
+  /// Abre e decifra um envelope selado e entrega o texto, com o remetente tirado do certificado,
+  /// no stream de [`Self::events`] como [`ChatEvent::MessageReceived`]. `server_timestamp` é o
+  /// do `Deliver` (milissegundos desde a época Unix): o certificado de remetente tem de valer
+  /// nesse instante, então uma mensagem que esperou na fila ainda abre. `Ok` quer dizer que o
+  /// evento foi entregue e o envelope pode ser confirmado ao servidor. Sem assinante, falha com
+  /// [`CoreError::NoEventListener`] antes de tocar no ratchet.
   Future<void> decrypt({
-    required DeviceAddress peer,
     required Envelope envelope,
+    required BigInt serverTimestamp,
   }) => FalaaiCoreLib.instance.api.crateApiFalaaiCoreDecrypt(
     that: this,
-    peer: peer,
     envelope: envelope,
+    serverTimestamp: serverTimestamp,
   );
 
-  /// Cifra `plaintext` para `peer`. Exige sessão aberta.
+  /// Cifra `plaintext` para `peer` e sela com o certificado de remetente; o resultado vai em
+  /// `Envelope.content`. Exige sessão aberta e certificado de remetente válido.
   Future<Envelope> encrypt({
     required DeviceAddress peer,
     required List<int> plaintext,
@@ -1258,5 +1301,16 @@ class FalaaiCoreImpl extends RustOpaque implements FalaaiCore {
       FalaaiCoreLib.instance.api.crateApiFalaaiCoreSetLocalAddress(
         that: this,
         address: address,
+      );
+
+  /// Entrega o certificado de remetente que o `accounts` emitiu para este dispositivo. Ele vale
+  /// pouco tempo (24h) e fica só em memória: o app o guarda, entrega de novo ao abrir o núcleo e
+  /// pede outro quando [`Self::encrypt`] falhar com [`CoreError::NoSenderCertificate`]. Falha
+  /// com [`CoreError::InvalidSenderCertificate`] se o certificado não encadeia até o trust
+  /// root, já venceu ou é de outro dispositivo ou identidade.
+  Future<void> setSenderCertificate({required List<int> certificate}) =>
+      FalaaiCoreLib.instance.api.crateApiFalaaiCoreSetSenderCertificate(
+        that: this,
+        certificate: certificate,
       );
 }

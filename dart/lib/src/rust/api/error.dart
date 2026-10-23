@@ -34,7 +34,7 @@ enum CoreError {
   /// ACI ou device id inválido.
   invalidAddress,
 
-  /// Chave pública malformada ou assinatura inválida no bundle.
+  /// Chave pública malformada ou assinatura inválida no bundle, ou trust root malformado.
   invalidKey,
 
   /// Não há sessão com o dispositivo remoto: buscar o bundle e chamar `process_prekey_bundle`.
@@ -46,8 +46,17 @@ enum CoreError {
   /// Envelope já decifrado antes.
   duplicateMessage,
 
-  /// Envelope malformado, adulterado ou que referencia pré-chave inexistente.
+  /// Envelope malformado, adulterado, com certificado de remetente que não valida ou que
+  /// referencia pré-chave inexistente.
   invalidMessage,
+
+  /// Sem certificado de remetente, ou o que há venceu: pedir um novo ao servidor e entregar
+  /// com `set_sender_certificate`.
+  noSenderCertificate,
+
+  /// O certificado de remetente não encadeia até o trust root, venceu ou é de outro
+  /// dispositivo ou identidade.
+  invalidSenderCertificate,
 
   /// Ninguém ouve o stream de eventos, então a mensagem decifrada não teria para onde ir.
   noEventListener,

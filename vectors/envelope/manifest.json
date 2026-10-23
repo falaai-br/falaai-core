@@ -1,10 +1,9 @@
 {
   "cases": [
     {
-      "ciphertext_kind": "prekey",
-      "ciphertext_version": 68,
       "client_message_id": "00000000000040008000000000000001",
-      "content_format": "libsignal-ciphertext",
+      "content_format": "sealed-sender",
+      "content_version": 17,
       "description": "Primeira mensagem da sessão: carrega o material do PQXDH",
       "destination_aci": "b0b0b0b0-0000-4000-8000-000000000000",
       "destination_device_id": 1,
@@ -12,15 +11,15 @@
       "files": {
         "deliver": {
           "path": "prekey.deliver.bin",
-          "sha256": "20a1ad6ee2fd20befe9ad1f42896f736d3b515db8ea0f5a8fc02b2780707174e"
+          "sha256": "c63776ab5537bababd1f304012726afa2b6f740eef1b1f4ef7533a5b8adb1463"
         },
         "envelope": {
           "path": "prekey.envelope.bin",
-          "sha256": "bff7b4259c69834c2a61f5acd7fdce93aa67645decd04043cae96fea242834e6"
+          "sha256": "b88a7663a62135875151a9c291eeb5ae6068da8cf679b03328eeddb5cd56c776"
         },
         "send": {
           "path": "prekey.send.bin",
-          "sha256": "71fa91f0e0dc250708831d7a13153683f97db2dd2c94c15b4905ab2094769a19"
+          "sha256": "85e6c127f9584746f8a91e5646a3992434bfa32727cbbb33a08b57b0ac41df4c"
         }
       },
       "name": "prekey",
@@ -28,10 +27,9 @@
       "server_timestamp": 1767225600000
     },
     {
-      "ciphertext_kind": "message",
-      "ciphertext_version": 68,
       "client_message_id": "00000000000040008000000000000002",
-      "content_format": "libsignal-ciphertext",
+      "content_format": "sealed-sender",
+      "content_version": 17,
       "description": "Mensagem de conversa numa sessão confirmada",
       "destination_aci": "b0b0b0b0-0000-4000-8000-000000000000",
       "destination_device_id": 1,
@@ -39,15 +37,15 @@
       "files": {
         "deliver": {
           "path": "message.deliver.bin",
-          "sha256": "429cd6cba1a0933a89b126766272761b1e99c25a70a379a2540bece9adc0723e"
+          "sha256": "7ada25619f8d12d272ff3e057ff6c207c5cf5c4f66009509e9bc9f84769465f3"
         },
         "envelope": {
           "path": "message.envelope.bin",
-          "sha256": "08e7b151500f39abf983c93f24960c92940f611c6d2c23ea0bf898f4e899b97f"
+          "sha256": "4c7e86ffe8a90a9b7d3ee9159a2a93283470ced55d0f192e2fef03be74f82521"
         },
         "send": {
           "path": "message.send.bin",
-          "sha256": "429b5364e3fe9e444eb35b20eb0fefd828f93d2357ccb97481cb6900dc078426"
+          "sha256": "6b0d410f33a397d0979e857dfccbaa6fe496e7c1bbc3f1132d47c8bbc7ebe8e5"
         }
       },
       "name": "message",
@@ -55,10 +53,9 @@
       "server_timestamp": 1767225600000
     },
     {
-      "ciphertext_kind": "message",
-      "ciphertext_version": 68,
       "client_message_id": "00000000000040008000000000000003",
-      "content_format": "libsignal-ciphertext",
+      "content_format": "sealed-sender",
+      "content_version": 17,
       "description": "Recibo de leitura",
       "destination_aci": "b0b0b0b0-0000-4000-8000-000000000000",
       "destination_device_id": 1,
@@ -66,15 +63,15 @@
       "files": {
         "deliver": {
           "path": "receipt.deliver.bin",
-          "sha256": "31e696842018190ff718bb9c5552e59743f67772bb92f407e56f4cd3968c0a28"
+          "sha256": "8c07bf2930bb0b6c0b64cb1d9d2a146259c691b155107a4414e9bca1cfa0be24"
         },
         "envelope": {
           "path": "receipt.envelope.bin",
-          "sha256": "fad54b247bf141ab30e8271c0c4abb81c258fda07d5cb3445fb766bad7c32479"
+          "sha256": "db9b55520b2f723721163f843aca044ff3f99ef376fbee90fcfafd534b063801"
         },
         "send": {
           "path": "receipt.send.bin",
-          "sha256": "0845f230ce98ffe164d8f3db2613f9f1d91d629a7475a2dcad15316d4f1072f3"
+          "sha256": "d05bd476c42c7e38efdf30d04cd63ffbddf59b24014b69e7d9401a86ed28cf58"
         }
       },
       "name": "receipt",
@@ -82,10 +79,9 @@
       "server_timestamp": 1767225600000
     },
     {
-      "ciphertext_kind": "message",
-      "ciphertext_version": 68,
       "client_message_id": "00000000000040008000000000000004",
-      "content_format": "libsignal-ciphertext",
+      "content_format": "sealed-sender",
+      "content_version": 17,
       "description": "Sinalização de chamada (oferta SDP)",
       "destination_aci": "b0b0b0b0-0000-4000-8000-000000000000",
       "destination_device_id": 1,
@@ -93,15 +89,15 @@
       "files": {
         "deliver": {
           "path": "call_signal.deliver.bin",
-          "sha256": "e72bc963b93da1ee762fce8a21a681f665b965cdaa31dcd070b231efea5da569"
+          "sha256": "5f7f13506ff697ac87b623ae1387bb26bd18130ce9608b461ce8221e67eba8c9"
         },
         "envelope": {
           "path": "call_signal.envelope.bin",
-          "sha256": "c721fcf91b77a12531ff572625b5d0ee20b6be45b85c28231b8dcbcf4e8275f8"
+          "sha256": "05d179082940106a70ae0ceef9c306741726cefef61494effed5a2b828cf1871"
         },
         "send": {
           "path": "call_signal.send.bin",
-          "sha256": "7af73c88f4a6e4ac1dee61c226330b4dc8ebbb21437bd408d437e0b0a76f32ec"
+          "sha256": "3c2d64be44dffd855fa4689d6652a3b36c52d98b9b34b8be8fdc145aaf87587e"
         }
       },
       "name": "call_signal",

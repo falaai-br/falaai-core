@@ -1,15 +1,21 @@
 //! Superfície exposta ao Flutter via flutter_rust_bridge.
 //!
 //! Material de chave não cruza esta fronteira: as chaves privadas nascem e ficam no banco local;
-//! saem só chaves públicas, envelopes cifrados e texto já decifrado. O único segredo que entra é
+//! saem só chaves públicas, envelopes selados e texto já decifrado. O único segredo que entra é
 //! a chave do banco, que a plataforma guarda (Keychain/Keystore); ela é zerada depois de abrir o
 //! banco e nunca volta ao Dart.
+//!
+//! Todo envelope sai selado (sealed sender): o servidor não vê o remetente. Para isso o app
+//! entrega o trust root do servidor ao abrir o núcleo e o certificado de remetente emitido pelo
+//! `accounts` com [`FalaaiCore::set_sender_certificate`].
 //!
 //! As funções são síncronas no Rust e o flutter_rust_bridge as roda no seu pool de threads; no
 //! Dart todas devolvem `Future`. Os futuros da libsignal não são `Send` e os stores sobre SQLite
 //! nunca suspendem, então são conduzidos na própria thread por [`block_on`].
 
 pub mod error;
+#[cfg(feature = "test-support")]
+pub mod test_support;
 pub mod types;
 
 use std::future::Future;
@@ -24,6 +30,7 @@ use zeroize::Zeroizing;
 use self::error::CoreError;
 use self::types::{AccountKeys, ChatEvent, DeviceAddress, Envelope, PreKeyBundle};
 use crate::frb_generated::StreamSink;
+use crate::protocol::certificate::TrustRoot;
 use crate::protocol::signal::LibsignalSessions;
 use crate::protocol::store::{SqliteStore, SqliteStores};
 use crate::protocol::{self, Address, ProtocolError, Sessions};
@@ -34,6 +41,7 @@ use crate::storage::{Database, DatabaseKey};
 pub struct FalaaiCore {
     db: Arc<Database>,
     store: SqliteStore,
+    trust_root: TrustRoot,
     /// Vazio até o endereço local ser conhecido: a libsignal precisa dele nas sessões.
     sessions: Mutex<Option<LibsignalSessions<SqliteStores>>>,
     events: Mutex<Option<Deliver>>,
@@ -45,18 +53,26 @@ type Deliver = Box<dyn Fn(ChatEvent) -> bool + Send>;
 
 impl FalaaiCore {
     /// Abre (ou cria) o banco local em `db_path` com a chave de 32 bytes guardada pela
-    /// plataforma.
-    pub fn open(db_path: String, db_key: Vec<u8>) -> Result<FalaaiCore, CoreError> {
+    /// plataforma. `trust_root` é a chave pública raiz do servidor, da configuração do app
+    /// (33 bytes, formato da libsignal): só certificados de remetente que encadeiam até ela são
+    /// aceitos.
+    pub fn open(
+        db_path: String,
+        db_key: Vec<u8>,
+        trust_root: Vec<u8>,
+    ) -> Result<FalaaiCore, CoreError> {
         let db_key = Zeroizing::new(db_key);
+        let trust_root = TrustRoot::new(&trust_root)?;
         let key = DatabaseKey::from_bytes(&db_key)?;
         let db = Arc::new(Database::open(Path::new(&db_path), &key)?);
         let store = SqliteStore::new(db.clone());
-        let sessions = store
-            .local_address()?
-            .map(|local| LibsignalSessions::new(local, SqliteStores::new(db.clone())));
+        let sessions = store.local_address()?.map(|local| {
+            LibsignalSessions::new(local, trust_root.clone(), SqliteStores::new(db.clone()))
+        });
         Ok(Self {
             db,
             store,
+            trust_root,
             sessions: Mutex::new(sessions),
             events: Mutex::new(None),
         })
@@ -74,11 +90,25 @@ impl FalaaiCore {
     pub fn set_local_address(&self, address: DeviceAddress) -> Result<(), CoreError> {
         let local = Address::try_from(&address)?;
         self.store.set_local_address(&local)?;
-        *lock(&self.sessions) = Some(LibsignalSessions::new(
-            local,
-            SqliteStores::new(self.db.clone()),
-        ));
+        let mut sessions = lock(&self.sessions);
+        // Repetir o mesmo endereço não descarta o certificado de remetente já entregue.
+        if sessions.is_none() {
+            *sessions = Some(LibsignalSessions::new(
+                local,
+                self.trust_root.clone(),
+                SqliteStores::new(self.db.clone()),
+            ));
+        }
         Ok(())
+    }
+
+    /// Entrega o certificado de remetente que o `accounts` emitiu para este dispositivo. Ele vale
+    /// pouco tempo (24h) e fica só em memória: o app o guarda, entrega de novo ao abrir o núcleo e
+    /// pede outro quando [`Self::encrypt`] falhar com [`CoreError::NoSenderCertificate`]. Falha
+    /// com [`CoreError::InvalidSenderCertificate`] se o certificado não encadeia até o trust
+    /// root, já venceu ou é de outro dispositivo ou identidade.
+    pub fn set_sender_certificate(&self, certificate: Vec<u8>) -> Result<(), CoreError> {
+        self.with_sessions(|sessions| block_on(sessions.set_sender_certificate(&certificate)))
     }
 
     /// Abre sessão com `peer` a partir do bundle de pré-chaves que ele publicou (PQXDH).
@@ -92,7 +122,8 @@ impl FalaaiCore {
         self.with_sessions(|sessions| block_on(sessions.start_session(&peer, &bundle)))
     }
 
-    /// Cifra `plaintext` para `peer`. Exige sessão aberta.
+    /// Cifra `plaintext` para `peer` e sela com o certificado de remetente; o resultado vai em
+    /// `Envelope.content`. Exige sessão aberta e certificado de remetente válido.
     pub fn encrypt(&self, peer: DeviceAddress, plaintext: Vec<u8>) -> Result<Envelope, CoreError> {
         let plaintext = Zeroizing::new(plaintext);
         let peer = Address::try_from(&peer)?;
@@ -101,21 +132,22 @@ impl FalaaiCore {
         Ok(envelope.into())
     }
 
-    /// Decifra um envelope de `peer` e entrega o texto no stream de [`Self::events`] como
-    /// [`ChatEvent::MessageReceived`]. `Ok` quer dizer que o evento foi entregue e o envelope
-    /// pode ser confirmado ao servidor. Sem assinante, falha com [`CoreError::NoEventListener`]
-    /// antes de tocar no ratchet.
-    pub fn decrypt(&self, peer: DeviceAddress, envelope: Envelope) -> Result<(), CoreError> {
-        let from = Address::try_from(&peer)?;
+    /// Abre e decifra um envelope selado e entrega o texto, com o remetente tirado do certificado,
+    /// no stream de [`Self::events`] como [`ChatEvent::MessageReceived`]. `server_timestamp` é o
+    /// do `Deliver` (milissegundos desde a época Unix): o certificado de remetente tem de valer
+    /// nesse instante, então uma mensagem que esperou na fila ainda abre. `Ok` quer dizer que o
+    /// evento foi entregue e o envelope pode ser confirmado ao servidor. Sem assinante, falha com
+    /// [`CoreError::NoEventListener`] antes de tocar no ratchet.
+    pub fn decrypt(&self, envelope: Envelope, server_timestamp: u64) -> Result<(), CoreError> {
         let envelope = protocol::Ciphertext::from(envelope);
         // O assinante fica travado durante a decifragem: não troca entre a checagem e a entrega.
         let events = lock(&self.events);
         let deliver = events.as_ref().ok_or(CoreError::NoEventListener)?;
-        let plaintext =
-            self.with_sessions(|sessions| block_on(sessions.decrypt(&from, &envelope)))?;
+        let decrypted =
+            self.with_sessions(|sessions| block_on(sessions.decrypt(&envelope, server_timestamp)))?;
         let event = ChatEvent::MessageReceived {
-            from: peer,
-            body: plaintext.to_vec(),
+            from: DeviceAddress::from(&decrypted.from),
+            body: decrypted.plaintext.to_vec(),
         };
         if deliver(event) {
             Ok(())
@@ -183,21 +215,66 @@ fn block_on<F: Future>(future: F) -> F::Output {
 #[cfg(test)]
 mod tests {
     use std::error::Error;
-    use std::path::Path;
     use std::sync::mpsc::{self, Receiver};
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::*;
-    use crate::api::types::EnvelopeKind;
+    use crate::protocol::certificate::CertificateIssuer;
 
     type TestResult = Result<(), Box<dyn Error>>;
 
     const KEY: [u8; 32] = [0x5A; 32];
+
+    /// Um dia, a validade dos certificados de remetente.
+    const DAY_MILLIS: u64 = 24 * 60 * 60 * 1000;
+
+    fn now_millis() -> Result<u64, Box<dyn Error>> {
+        Ok(u64::try_from(
+            SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis(),
+        )?)
+    }
 
     /// Assina os eventos de `core` num canal.
     fn subscribe(core: &FalaaiCore) -> Receiver<ChatEvent> {
         let (sender, events) = mpsc::channel();
         core.subscribe(Box::new(move |event| sender.send(event).is_ok()));
         events
+    }
+
+    /// O servidor: trust root, certificados de remetente e os bancos dos aparelhos em `dir`.
+    struct Server {
+        dir: tempfile::TempDir,
+        certificates: CertificateIssuer,
+    }
+
+    impl Server {
+        fn new() -> Result<Self, Box<dyn Error>> {
+            Ok(Self {
+                dir: tempfile::tempdir()?,
+                certificates: CertificateIssuer::new()?,
+            })
+        }
+
+        fn open(&self, seed: u8) -> Result<FalaaiCore, CoreError> {
+            let path = self.dir.path().join(format!("{seed:02x}.db"));
+            FalaaiCore::open(
+                path.to_string_lossy().into_owned(),
+                KEY.to_vec(),
+                self.certificates.trust_root(),
+            )
+        }
+
+        /// Certificado de remetente de `address` com a identidade `keys`, válido por um dia.
+        fn certificate(
+            &self,
+            address: &DeviceAddress,
+            keys: &AccountKeys,
+        ) -> Result<Vec<u8>, Box<dyn Error>> {
+            let address = Address::try_from(address)?;
+            Ok(self
+                .certificates
+                .issue(&address, &keys.identity_key, now_millis()? + DAY_MILLIS)?)
+        }
     }
 
     /// Um dispositivo: núcleo sobre um banco em arquivo e o stream de eventos assinado.
@@ -209,12 +286,14 @@ mod tests {
     }
 
     impl Device {
-        /// Gera as chaves, "registra" (grava o endereço local) e assina os eventos.
-        fn register(dir: &Path, seed: u8) -> Result<Self, Box<dyn Error>> {
-            let core = open(dir, seed)?;
+        /// Gera as chaves, "registra" (grava o endereço local), entrega o certificado de remetente
+        /// e assina os eventos.
+        fn register(server: &Server, seed: u8) -> Result<Self, Box<dyn Error>> {
+            let core = server.open(seed)?;
             let keys = core.generate_account_keys()?;
             let address = address(seed);
             core.set_local_address(address.clone())?;
+            core.set_sender_certificate(server.certificate(&address, &keys)?)?;
             let events = subscribe(&core);
             Ok(Self {
                 address,
@@ -244,8 +323,12 @@ mod tests {
             self.core.encrypt(to.address.clone(), text.to_vec())
         }
 
+        fn deliver(&self, envelope: Envelope) -> Result<(), Box<dyn Error>> {
+            Ok(self.core.decrypt(envelope, now_millis()?)?)
+        }
+
         fn receive(&self, from: &Device, envelope: Envelope) -> Result<Vec<u8>, Box<dyn Error>> {
-            self.core.decrypt(from.address.clone(), envelope)?;
+            self.deliver(envelope)?;
             match self.events.try_recv()? {
                 ChatEvent::MessageReceived { from: sender, body } => {
                     assert_eq!(sender, from.address);
@@ -253,11 +336,6 @@ mod tests {
                 }
             }
         }
-    }
-
-    fn open(dir: &Path, seed: u8) -> Result<FalaaiCore, CoreError> {
-        let path = dir.join(format!("{seed:02x}.db"));
-        FalaaiCore::open(path.to_string_lossy().into_owned(), KEY.to_vec())
     }
 
     fn address(seed: u8) -> DeviceAddress {
@@ -268,9 +346,9 @@ mod tests {
     }
 
     /// Alice abre sessão com o bundle de Bob.
-    fn alice_and_bob(dir: &Path) -> Result<(Device, Device), Box<dyn Error>> {
-        let alice = Device::register(dir, 0xA1)?;
-        let bob = Device::register(dir, 0xB0)?;
+    fn alice_and_bob(server: &Server) -> Result<(Device, Device), Box<dyn Error>> {
+        let alice = Device::register(server, 0xA1)?;
+        let bob = Device::register(server, 0xB0)?;
         alice
             .core
             .process_prekey_bundle(bob.address.clone(), bob.bundle()?)?;
@@ -278,45 +356,107 @@ mod tests {
     }
 
     #[test]
-    fn dois_nucleos_trocam_mensagens_pela_api() -> TestResult {
-        let dir = tempfile::tempdir()?;
-        let (alice, bob) = alice_and_bob(dir.path())?;
+    fn dois_nucleos_trocam_mensagens_seladas_pela_api() -> TestResult {
+        let server = Server::new()?;
+        let (alice, bob) = alice_and_bob(&server)?;
 
         let first = alice.send(&bob, b"oi, bob")?;
-        assert_eq!(first.kind, EnvelopeKind::PreKey);
         assert_eq!(bob.receive(&alice, first)?, b"oi, bob");
 
         let reply = bob.send(&alice, b"oi, alice")?;
-        assert_eq!(reply.kind, EnvelopeKind::Message);
         assert_eq!(alice.receive(&bob, reply)?, b"oi, alice");
 
         let next = alice.send(&bob, b"tudo bem?")?;
-        assert_eq!(next.kind, EnvelopeKind::Message);
         assert_eq!(bob.receive(&alice, next)?, b"tudo bem?");
         Ok(())
     }
 
     #[test]
     fn sessao_e_endereco_local_sobrevivem_a_reabrir() -> TestResult {
-        let dir = tempfile::tempdir()?;
-        let (alice, mut bob) = alice_and_bob(dir.path())?;
+        let server = Server::new()?;
+        let (alice, mut bob) = alice_and_bob(&server)?;
         let first = alice.send(&bob, b"oi, bob")?;
 
-        bob.core = open(dir.path(), 0xB0)?;
+        bob.core = server.open(0xB0)?;
         bob.events = subscribe(&bob.core);
         assert_eq!(bob.receive(&alice, first)?, b"oi, bob");
         Ok(())
     }
 
     #[test]
+    fn certificado_de_remetente_fica_so_em_memoria() -> TestResult {
+        let server = Server::new()?;
+        let (mut alice, bob) = alice_and_bob(&server)?;
+        alice.core = server.open(0xA1)?;
+        assert_eq!(alice.send(&bob, b"oi"), Err(CoreError::NoSenderCertificate));
+        alice
+            .core
+            .set_sender_certificate(server.certificate(&alice.address, &alice.keys)?)?;
+        assert_eq!(bob.receive(&alice, alice.send(&bob, b"oi")?)?, b"oi");
+        Ok(())
+    }
+
+    #[test]
+    fn repetir_o_endereco_local_mantem_o_certificado() -> TestResult {
+        let server = Server::new()?;
+        let (alice, bob) = alice_and_bob(&server)?;
+        alice.core.set_local_address(alice.address.clone())?;
+        assert_eq!(bob.receive(&alice, alice.send(&bob, b"oi")?)?, b"oi");
+        Ok(())
+    }
+
+    #[test]
+    fn certificado_de_outro_dispositivo_e_recusado() -> TestResult {
+        let server = Server::new()?;
+        let (alice, bob) = alice_and_bob(&server)?;
+        assert_eq!(
+            alice
+                .core
+                .set_sender_certificate(server.certificate(&bob.address, &bob.keys)?),
+            Err(CoreError::InvalidSenderCertificate)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn certificado_exige_endereco_local() -> TestResult {
+        let server = Server::new()?;
+        let core = server.open(0xA1)?;
+        let keys = core.generate_account_keys()?;
+        assert_eq!(
+            core.set_sender_certificate(server.certificate(&address(0xA1), &keys)?),
+            Err(CoreError::NoAccount)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn trust_root_malformado_e_recusado() -> TestResult {
+        let server = Server::new()?;
+        let path = server.dir.path().join("a1.db");
+        let mut trust_root = server.certificates.trust_root();
+        trust_root.truncate(10);
+        assert_eq!(
+            FalaaiCore::open(
+                path.to_string_lossy().into_owned(),
+                KEY.to_vec(),
+                trust_root
+            )
+            .err(),
+            Some(CoreError::InvalidKey)
+        );
+        Ok(())
+    }
+
+    #[test]
     fn decifrar_sem_assinante_falha_sem_avancar_o_ratchet() -> TestResult {
-        let dir = tempfile::tempdir()?;
-        let (alice, bob) = alice_and_bob(dir.path())?;
+        let server = Server::new()?;
+        let (alice, bob) = alice_and_bob(&server)?;
         let first = alice.send(&bob, b"oi, bob")?;
 
-        let unsubscribed = open(dir.path(), 0xB0)?;
+        let unsubscribed = server.open(0xB0)?;
         assert_eq!(
-            unsubscribed.decrypt(alice.address.clone(), first.clone()),
+            unsubscribed.decrypt(first.clone(), now_millis()?),
             Err(CoreError::NoEventListener)
         );
         assert_eq!(bob.receive(&alice, first)?, b"oi, bob");
@@ -325,12 +465,12 @@ mod tests {
 
     #[test]
     fn decifrar_com_stream_fechado_falha() -> TestResult {
-        let dir = tempfile::tempdir()?;
-        let (alice, mut bob) = alice_and_bob(dir.path())?;
+        let server = Server::new()?;
+        let (alice, mut bob) = alice_and_bob(&server)?;
         bob.events = mpsc::channel().1;
         let first = alice.send(&bob, b"oi, bob")?;
         assert_eq!(
-            bob.core.decrypt(alice.address.clone(), first),
+            bob.core.decrypt(first, now_millis()?),
             Err(CoreError::NoEventListener)
         );
         Ok(())
@@ -338,22 +478,34 @@ mod tests {
 
     #[test]
     fn envelope_repetido_e_recusado() -> TestResult {
-        let dir = tempfile::tempdir()?;
-        let (alice, bob) = alice_and_bob(dir.path())?;
+        let server = Server::new()?;
+        let (alice, bob) = alice_and_bob(&server)?;
         bob.receive(&alice, alice.send(&bob, b"oi")?)?;
         let reply = bob.send(&alice, b"oi")?;
         alice.receive(&bob, reply.clone())?;
         assert_eq!(
-            alice.core.decrypt(bob.address.clone(), reply),
+            alice.core.decrypt(reply, now_millis()?),
             Err(CoreError::DuplicateMessage)
         );
         Ok(())
     }
 
     #[test]
+    fn envelope_de_outro_destinatario_e_recusado() -> TestResult {
+        let server = Server::new()?;
+        let (alice, bob) = alice_and_bob(&server)?;
+        let carol = Device::register(&server, 0xC0)?;
+        let first = alice.send(&bob, b"oi, bob")?;
+        assert!(carol.deliver(first.clone()).is_err());
+        assert!(carol.events.try_recv().is_err());
+        assert_eq!(bob.receive(&alice, first)?, b"oi, bob");
+        Ok(())
+    }
+
+    #[test]
     fn cifrar_sem_sessao_falha() -> TestResult {
-        let dir = tempfile::tempdir()?;
-        let alice = Device::register(dir.path(), 0xA1)?;
+        let server = Server::new()?;
+        let alice = Device::register(&server, 0xA1)?;
         assert_eq!(
             alice.core.encrypt(address(0xB0), b"oi".to_vec()),
             Err(CoreError::SessionNotFound)
@@ -363,8 +515,8 @@ mod tests {
 
     #[test]
     fn sessoes_exigem_conta_e_endereco_local() -> TestResult {
-        let dir = tempfile::tempdir()?;
-        let core = open(dir.path(), 0xA1)?;
+        let server = Server::new()?;
+        let core = server.open(0xA1)?;
         assert_eq!(
             core.set_local_address(address(0xA1)),
             Err(CoreError::NoAccount)
@@ -379,8 +531,8 @@ mod tests {
 
     #[test]
     fn chaves_da_conta_sao_geradas_uma_vez() -> TestResult {
-        let dir = tempfile::tempdir()?;
-        let core = open(dir.path(), 0xA1)?;
+        let server = Server::new()?;
+        let core = server.open(0xA1)?;
         core.generate_account_keys()?;
         assert_eq!(
             core.generate_account_keys().err(),
@@ -391,14 +543,14 @@ mod tests {
 
     #[test]
     fn endereco_local_nao_muda_depois_de_gravado() -> TestResult {
-        let dir = tempfile::tempdir()?;
-        let alice = Device::register(dir.path(), 0xA1)?;
+        let server = Server::new()?;
+        let alice = Device::register(&server, 0xA1)?;
         alice.core.set_local_address(alice.address.clone())?;
         assert_eq!(
             alice.core.set_local_address(address(0xC0)),
             Err(CoreError::AccountExists)
         );
-        let reopened = open(dir.path(), 0xA1)?;
+        let reopened = server.open(0xA1)?;
         assert_eq!(
             reopened.set_local_address(address(0xC0)),
             Err(CoreError::AccountExists)
@@ -408,8 +560,8 @@ mod tests {
 
     #[test]
     fn endereco_invalido_e_recusado() -> TestResult {
-        let dir = tempfile::tempdir()?;
-        let alice = Device::register(dir.path(), 0xA1)?;
+        let server = Server::new()?;
+        let alice = Device::register(&server, 0xA1)?;
         for peer in [
             DeviceAddress {
                 aci: "nao-e-uuid".to_owned(),
@@ -430,9 +582,9 @@ mod tests {
 
     #[test]
     fn bundle_com_chave_malformada_ou_assinatura_errada_e_recusado() -> TestResult {
-        let dir = tempfile::tempdir()?;
-        let alice = Device::register(dir.path(), 0xA1)?;
-        let bob = Device::register(dir.path(), 0xB0)?;
+        let server = Server::new()?;
+        let alice = Device::register(&server, 0xA1)?;
+        let bob = Device::register(&server, 0xB0)?;
 
         let mut malformed = bob.bundle()?;
         malformed.identity_key.truncate(10);
@@ -456,15 +608,21 @@ mod tests {
 
     #[test]
     fn banco_com_chave_errada_ou_de_tamanho_invalido_nao_abre() -> TestResult {
-        let dir = tempfile::tempdir()?;
-        let path = dir.path().join("a1.db").to_string_lossy().into_owned();
-        drop(FalaaiCore::open(path.clone(), KEY.to_vec())?);
+        let server = Server::new()?;
+        let path = server.dir.path().join("a1.db");
+        let path = path.to_string_lossy().into_owned();
+        let trust_root = server.certificates.trust_root();
+        drop(FalaaiCore::open(
+            path.clone(),
+            KEY.to_vec(),
+            trust_root.clone(),
+        )?);
         assert_eq!(
-            FalaaiCore::open(path.clone(), vec![0x5A; 16]).err(),
+            FalaaiCore::open(path.clone(), vec![0x5A; 16], trust_root.clone()).err(),
             Some(CoreError::InvalidDatabaseKey)
         );
         assert_eq!(
-            FalaaiCore::open(path, vec![0x00; 32]).err(),
+            FalaaiCore::open(path, vec![0x00; 32], trust_root).err(),
             Some(CoreError::WrongDatabaseKey)
         );
         Ok(())
@@ -478,7 +636,6 @@ mod tests {
             body: b"segredo".to_vec(),
         };
         let envelope = Envelope {
-            kind: EnvelopeKind::Message,
             body: b"segredo".to_vec(),
         };
         for debug in [format!("{event:?}"), format!("{envelope:?}")] {

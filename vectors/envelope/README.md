@@ -1,6 +1,6 @@
 # Vetores de envelope
 
-Envelopes reais do `falaai-core` para os testes de contrato do `falaai-server`. Gerados por `tests/envelope_vectors.rs`: Alice abre sessão (PQXDH) com Bob, manda um envelope por caso, e Bob decifra todos antes de os vetores serem gravados. Schema: `falaai.v1` do [falaai-proto](https://github.com/falaai-br/falaai-proto) no commit `57fa36c`.
+Envelopes reais do `falaai-core` para os testes de contrato do `falaai-server`. Gerados por `tests/envelope_vectors.rs`: Alice abre sessão (PQXDH) com Bob, manda um envelope selado (sealed sender) por caso, e Bob decifra todos antes de os vetores serem gravados. Schema: `falaai.v1` do [falaai-proto](https://github.com/falaai-br/falaai-proto) no commit `57fa36c`.
 
 ## Arquivos
 
@@ -19,8 +19,7 @@ Por caso (`prekey`, `message`, `receipt`, `call_signal`):
 | `name`, `description` | Identificação do caso |
 | `envelope_type` | Valor de `Envelope.type`, pelo nome no `.proto` |
 | `content_format` | O que vai em `Envelope.content` (ver abaixo) |
-| `ciphertext_kind` | `prekey` (primeira mensagem, abre a sessão) ou `message` |
-| `ciphertext_version` | Primeiro byte de `content`: versão do formato da libsignal |
+| `content_version` | Primeiro byte de `content`: versão do sealed sender da libsignal (`17` = `0x11`, v1) |
 | `client_message_id` | `Envelope.client_message_id`, em hex |
 | `destination_aci`, `destination_device_id` | Destino no `Send` |
 | `seq`, `server_timestamp` | Valores no `Deliver` de referência |
@@ -34,11 +33,11 @@ Por caso (`prekey`, `message`, `receipt`, `call_signal`):
 
 `<caso>.deliver.bin` é a codificação de referência do `Deliver` com o `seq` e o `server_timestamp` do manifesto, útil para testar o lado que decodifica.
 
-## Fase 0: `content` ainda não é sealed sender
+## `content` é sealed sender
 
-Hoje `content_format` é `libsignal-ciphertext`: o ciphertext como o core devolve, uma `PreKeySignalMessage` ou uma `SignalMessage`. O `.proto` define `content` como a `UnidentifiedSenderMessage` do sealed sender, que ainda não existe no core.
+`content_format` é `sealed-sender`: a `UnidentifiedSenderMessage` (sealed sender v1) da libsignal, como o core devolve. O tipo da mensagem de dentro (a primeira da sessão, que abre o PQXDH, ou uma da sessão confirmada) e o certificado de remetente só aparecem depois que o destinatário abre o selo; o servidor não tem como distinguir o caso `prekey` dos outros.
 
-A diferença importa: a `PreKeySignalMessage` leva em claro a identidade pública do remetente e o ACI e o device id dos dois lados. Por isso o teste exige ausência do remetente só fora de `content`. Quando o sealed sender entrar, `content_format` vira `sealed-sender`, os vetores são regerados e a exigência passa a cobrir os bytes inteiros. Decisão e acompanhamento: bead `flc-8u3`.
+O teste exige que o ACI do remetente, em texto ou nos 16 bytes do UUID, não apareça em nenhum dos arquivos, `content` incluído, e que o do destinatário não apareça dentro de `content`. Decisão: bead `flc-8u3`.
 
 ## Regerar
 

@@ -581,6 +581,7 @@ mod tests {
     };
 
     use super::*;
+    use crate::protocol::certificate::{self, CertificateIssuer, TrustRoot};
     use crate::protocol::signal::LibsignalSessions;
     use crate::protocol::testing::{self, ready};
     use crate::protocol::{Address, Ciphertext, CiphertextKind, Sessions};
@@ -841,29 +842,57 @@ mod tests {
         address: Address,
         path: PathBuf,
         db: Arc<Database>,
+        trust_root: Vec<u8>,
+        /// Certificado de remetente, entregue de novo a cada reabertura.
+        certificate: Vec<u8>,
         sessions: LibsignalSessions<SqliteStores>,
     }
 
     impl Device {
-        fn new(dir: &Path, seed: u8) -> Result<Self, Box<dyn Error>> {
+        fn new(dir: &Path, seed: u8, server: &CertificateIssuer) -> Result<Self, Box<dyn Error>> {
             let path = dir.join(format!("{seed:02x}.db"));
             let db = Arc::new(Database::open(&path, &key()?)?);
             let identity = IdentityKeyPair::generate(&mut rand::rng());
             SqliteStore::new(db.clone()).create_local_identity(&identity, u32::from(seed))?;
             let address = Address::new(&Aci::from_uuid_bytes([seed; 16]).service_id_string(), 1)?;
+            let expiration = certificate::now()?.add_millis(24 * 60 * 60 * 1000);
+            let certificate = server.issue(
+                &address,
+                &identity.identity_key().serialize(),
+                expiration.epoch_millis(),
+            )?;
+            let trust_root = server.trust_root();
+            let sessions = Self::sessions(&address, &db, &trust_root, &certificate)?;
             Ok(Self {
-                sessions: LibsignalSessions::new(address.clone(), SqliteStores::new(db.clone())),
                 address,
                 path,
                 db,
+                trust_root,
+                certificate,
+                sessions,
             })
+        }
+
+        fn sessions(
+            address: &Address,
+            db: &Arc<Database>,
+            trust_root: &[u8],
+            certificate: &[u8],
+        ) -> Result<LibsignalSessions<SqliteStores>, Box<dyn Error>> {
+            let mut sessions = LibsignalSessions::new(
+                address.clone(),
+                TrustRoot::new(trust_root)?,
+                SqliteStores::new(db.clone()),
+            );
+            ready(sessions.set_sender_certificate(certificate))??;
+            Ok(sessions)
         }
 
         /// Reabre o banco do arquivo, como um app reiniciado ou a extensão de notificação.
         fn reopen(&mut self) -> TestResult {
             self.db = Arc::new(Database::open(&self.path, &key()?)?);
             self.sessions =
-                LibsignalSessions::new(self.address.clone(), SqliteStores::new(self.db.clone()));
+                Self::sessions(&self.address, &self.db, &self.trust_root, &self.certificate)?;
             Ok(())
         }
 
@@ -875,26 +904,37 @@ mod tests {
             Ok(ready(self.sessions.encrypt(&to.address, plaintext))??)
         }
 
+        fn kind(&mut self, envelope: &Ciphertext) -> Result<CiphertextKind, Box<dyn Error>> {
+            Ok(ready(self.sessions.inner_kind(envelope))??)
+        }
+
         fn decrypt(
             &mut self,
             from: &Device,
             envelope: &Ciphertext,
         ) -> Result<Result<Vec<u8>, ProtocolError>, Box<dyn Error>> {
-            Ok(ready(self.sessions.decrypt(&from.address, envelope))?.map(|p| p.to_vec()))
+            let now = certificate::now()?.epoch_millis();
+            Ok(
+                ready(self.sessions.decrypt(envelope, now))?.map(|decrypted| {
+                    assert_eq!(decrypted.from, from.address);
+                    decrypted.plaintext.to_vec()
+                }),
+            )
         }
     }
 
     #[test]
     fn sessao_sobrevive_a_reabrir_o_banco() -> TestResult {
         let dir = tempfile::tempdir()?;
-        let mut alice = Device::new(dir.path(), 0xA1)?;
-        let mut bob = Device::new(dir.path(), 0xB0)?;
+        let server = CertificateIssuer::new()?;
+        let mut alice = Device::new(dir.path(), 0xA1, &server)?;
+        let mut bob = Device::new(dir.path(), 0xB0, &server)?;
         let bundle =
             testing::publish_bundle(SqliteStores::new(bob.db.clone()).parts(), &bob.address)?;
 
         ready(alice.sessions.start_session(&bob.address, &bundle))??;
         let first = alice.encrypt(&bob, b"oi, bob")?;
-        assert_eq!(first.kind(), CiphertextKind::PreKey);
+        assert_eq!(bob.kind(&first)?, CiphertextKind::PreKey);
 
         bob.reopen()?;
         assert_eq!(bob.decrypt(&alice, &first)??, b"oi, bob");
@@ -908,7 +948,7 @@ mod tests {
         assert_eq!(alice.decrypt(&bob, &reply)??, b"oi, alice");
 
         let next = alice.encrypt(&bob, b"tudo bem?")?;
-        assert_eq!(next.kind(), CiphertextKind::Message);
+        assert_eq!(bob.kind(&next)?, CiphertextKind::Message);
         bob.reopen()?;
         assert_eq!(bob.decrypt(&alice, &next)??, b"tudo bem?");
         assert!(bob.decrypt(&alice, &first)?.is_err(), "replay do PQXDH");

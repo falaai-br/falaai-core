@@ -40,7 +40,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.13.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -1883602431;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 207922590;
 
 // Section: executor
 
@@ -73,8 +73,8 @@ fn wire__crate__api__FalaaiCore_decrypt_impl(
             let api_that = <RustOpaqueMoi<
                 flutter_rust_bridge::for_generated::RustAutoOpaqueInner<FalaaiCore>,
             >>::sse_decode(&mut deserializer);
-            let api_peer = <crate::api::types::DeviceAddress>::sse_decode(&mut deserializer);
             let api_envelope = <crate::api::types::Envelope>::sse_decode(&mut deserializer);
+            let api_server_timestamp = <u64>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| {
                 transform_result_sse::<_, crate::api::error::CoreError>((move || {
@@ -92,8 +92,11 @@ fn wire__crate__api__FalaaiCore_decrypt_impl(
                         }
                     }
                     let api_that_guard = api_that_guard.unwrap();
-                    let output_ok =
-                        crate::api::FalaaiCore::decrypt(&*api_that_guard, api_peer, api_envelope)?;
+                    let output_ok = crate::api::FalaaiCore::decrypt(
+                        &*api_that_guard,
+                        api_envelope,
+                        api_server_timestamp,
+                    )?;
                     std::result::Result::Ok(output_ok)
                 })())
             }
@@ -281,10 +284,12 @@ fn wire__crate__api__FalaaiCore_open_impl(
                 flutter_rust_bridge::for_generated::SseDeserializer::new(message);
             let api_db_path = <String>::sse_decode(&mut deserializer);
             let api_db_key = <Vec<u8>>::sse_decode(&mut deserializer);
+            let api_trust_root = <Vec<u8>>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| {
                 transform_result_sse::<_, crate::api::error::CoreError>((move || {
-                    let output_ok = crate::api::FalaaiCore::open(api_db_path, api_db_key)?;
+                    let output_ok =
+                        crate::api::FalaaiCore::open(api_db_path, api_db_key, api_trust_root)?;
                     std::result::Result::Ok(output_ok)
                 })())
             }
@@ -391,6 +396,59 @@ fn wire__crate__api__FalaaiCore_set_local_address_impl(
                     let api_that_guard = api_that_guard.unwrap();
                     let output_ok =
                         crate::api::FalaaiCore::set_local_address(&*api_that_guard, api_address)?;
+                    std::result::Result::Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
+fn wire__crate__api__FalaaiCore_set_sender_certificate_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "FalaaiCore_set_sender_certificate",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_that = <RustOpaqueMoi<
+                flutter_rust_bridge::for_generated::RustAutoOpaqueInner<FalaaiCore>,
+            >>::sse_decode(&mut deserializer);
+            let api_certificate = <Vec<u8>>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, crate::api::error::CoreError>((move || {
+                    let mut api_that_guard = None;
+                    let decode_indices_ =
+                        flutter_rust_bridge::for_generated::lockable_compute_decode_order(vec![
+                            flutter_rust_bridge::for_generated::LockableOrderInfo::new(
+                                &api_that, 0, false,
+                            ),
+                        ]);
+                    for i in decode_indices_ {
+                        match i {
+                            0 => api_that_guard = Some(api_that.lockable_decode_sync_ref()),
+                            _ => unreachable!(),
+                        }
+                    }
+                    let api_that_guard = api_that_guard.unwrap();
+                    let output_ok = crate::api::FalaaiCore::set_sender_certificate(
+                        &*api_that_guard,
+                        api_certificate,
+                    )?;
                     std::result::Result::Ok(output_ok)
                 })())
             }
@@ -511,8 +569,10 @@ impl SseDecode for crate::api::error::CoreError {
             10 => crate::api::error::CoreError::UntrustedIdentity,
             11 => crate::api::error::CoreError::DuplicateMessage,
             12 => crate::api::error::CoreError::InvalidMessage,
-            13 => crate::api::error::CoreError::NoEventListener,
-            14 => crate::api::error::CoreError::Internal,
+            13 => crate::api::error::CoreError::NoSenderCertificate,
+            14 => crate::api::error::CoreError::InvalidSenderCertificate,
+            15 => crate::api::error::CoreError::NoEventListener,
+            16 => crate::api::error::CoreError::Internal,
             _ => unreachable!("Invalid variant for CoreError: {}", inner),
         };
     }
@@ -533,24 +593,8 @@ impl SseDecode for crate::api::types::DeviceAddress {
 impl SseDecode for crate::api::types::Envelope {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
-        let mut var_kind = <crate::api::types::EnvelopeKind>::sse_decode(deserializer);
         let mut var_body = <Vec<u8>>::sse_decode(deserializer);
-        return crate::api::types::Envelope {
-            kind: var_kind,
-            body: var_body,
-        };
-    }
-}
-
-impl SseDecode for crate::api::types::EnvelopeKind {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
-        let mut inner = <i32>::sse_decode(deserializer);
-        return match inner {
-            0 => crate::api::types::EnvelopeKind::PreKey,
-            1 => crate::api::types::EnvelopeKind::Message,
-            _ => unreachable!("Invalid variant for EnvelopeKind: {}", inner),
-        };
+        return crate::api::types::Envelope { body: var_body };
     }
 }
 
@@ -659,6 +703,13 @@ impl SseDecode for u32 {
     }
 }
 
+impl SseDecode for u64 {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        deserializer.cursor.read_u64::<NativeEndian>().unwrap()
+    }
+}
+
 impl SseDecode for u8 {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -711,6 +762,12 @@ fn pde_ffi_dispatcher_primary_impl(
             data_len,
         ),
         7 => wire__crate__api__FalaaiCore_set_local_address_impl(port, ptr, rust_vec_len, data_len),
+        8 => wire__crate__api__FalaaiCore_set_sender_certificate_impl(
+            port,
+            ptr,
+            rust_vec_len,
+            data_len,
+        ),
         _ => unreachable!(),
     }
 }
@@ -810,8 +867,10 @@ impl flutter_rust_bridge::IntoDart for crate::api::error::CoreError {
             Self::UntrustedIdentity => 10.into_dart(),
             Self::DuplicateMessage => 11.into_dart(),
             Self::InvalidMessage => 12.into_dart(),
-            Self::NoEventListener => 13.into_dart(),
-            Self::Internal => 14.into_dart(),
+            Self::NoSenderCertificate => 13.into_dart(),
+            Self::InvalidSenderCertificate => 14.into_dart(),
+            Self::NoEventListener => 15.into_dart(),
+            Self::Internal => 16.into_dart(),
             _ => unreachable!(),
         }
     }
@@ -848,11 +907,7 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::types::DeviceAddress>
 // Codec=Dco (DartCObject based), see doc to use other codecs
 impl flutter_rust_bridge::IntoDart for crate::api::types::Envelope {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
-        [
-            self.kind.into_into_dart().into_dart(),
-            self.body.into_into_dart().into_dart(),
-        ]
-        .into_dart()
+        [self.body.into_into_dart().into_dart()].into_dart()
     }
 }
 impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::api::types::Envelope {}
@@ -860,27 +915,6 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::types::Envelope>
     for crate::api::types::Envelope
 {
     fn into_into_dart(self) -> crate::api::types::Envelope {
-        self
-    }
-}
-// Codec=Dco (DartCObject based), see doc to use other codecs
-impl flutter_rust_bridge::IntoDart for crate::api::types::EnvelopeKind {
-    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
-        match self {
-            Self::PreKey => 0.into_dart(),
-            Self::Message => 1.into_dart(),
-            _ => unreachable!(),
-        }
-    }
-}
-impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
-    for crate::api::types::EnvelopeKind
-{
-}
-impl flutter_rust_bridge::IntoIntoDart<crate::api::types::EnvelopeKind>
-    for crate::api::types::EnvelopeKind
-{
-    fn into_into_dart(self) -> crate::api::types::EnvelopeKind {
         self
     }
 }
@@ -1034,8 +1068,10 @@ impl SseEncode for crate::api::error::CoreError {
                 crate::api::error::CoreError::UntrustedIdentity => 10,
                 crate::api::error::CoreError::DuplicateMessage => 11,
                 crate::api::error::CoreError::InvalidMessage => 12,
-                crate::api::error::CoreError::NoEventListener => 13,
-                crate::api::error::CoreError::Internal => 14,
+                crate::api::error::CoreError::NoSenderCertificate => 13,
+                crate::api::error::CoreError::InvalidSenderCertificate => 14,
+                crate::api::error::CoreError::NoEventListener => 15,
+                crate::api::error::CoreError::Internal => 16,
                 _ => {
                     unimplemented!("");
                 }
@@ -1056,24 +1092,7 @@ impl SseEncode for crate::api::types::DeviceAddress {
 impl SseEncode for crate::api::types::Envelope {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
-        <crate::api::types::EnvelopeKind>::sse_encode(self.kind, serializer);
         <Vec<u8>>::sse_encode(self.body, serializer);
-    }
-}
-
-impl SseEncode for crate::api::types::EnvelopeKind {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
-        <i32>::sse_encode(
-            match self {
-                crate::api::types::EnvelopeKind::PreKey => 0,
-                crate::api::types::EnvelopeKind::Message => 1,
-                _ => {
-                    unimplemented!("");
-                }
-            },
-            serializer,
-        );
     }
 }
 
@@ -1156,6 +1175,13 @@ impl SseEncode for u32 {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         serializer.cursor.write_u32::<NativeEndian>(self).unwrap();
+    }
+}
+
+impl SseEncode for u64 {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        serializer.cursor.write_u64::<NativeEndian>(self).unwrap();
     }
 }
 
