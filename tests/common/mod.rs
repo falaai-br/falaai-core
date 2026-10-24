@@ -134,7 +134,7 @@ impl Device {
         from: &Device,
         envelope: Envelope,
     ) -> Result<Result<Vec<u8>, CoreError>, Box<dyn Error>> {
-        match self.core.decrypt(envelope, now_millis()?) {
+        match self.core.decrypt(envelope, Vec::new(), now_millis()?) {
             Ok(()) => match self.events.try_recv()? {
                 ChatEvent::MessageReceived {
                     id,
@@ -151,6 +151,7 @@ impl Device {
                     }
                     Ok(Ok(body))
                 }
+                other => Err(format!("esperava mensagem, veio {other:?}").into()),
             },
             Err(error) => {
                 if self.events.try_recv().is_ok() {
@@ -181,9 +182,20 @@ impl Device {
         &self,
         timeout: Duration,
     ) -> Result<(DeviceAddress, Vec<u8>), Box<dyn Error>> {
-        match self.events.recv_timeout(timeout)? {
+        match self.next_event(timeout)? {
             ChatEvent::MessageReceived { from, body, .. } => Ok((from, body)),
+            other => Err(format!("esperava mensagem, veio {other:?}").into()),
         }
+    }
+
+    /// Próximo evento que chegar no stream em até `timeout`.
+    pub fn next_event(&self, timeout: Duration) -> Result<ChatEvent, Box<dyn Error>> {
+        Ok(self.events.recv_timeout(timeout)?)
+    }
+
+    /// `true` se nenhum evento está esperando no stream.
+    pub fn no_events(&self) -> bool {
+        self.events.try_recv().is_err()
     }
 
     /// O mesmo aparelho aberto por outro processo, como a Notification Service Extension do iOS:

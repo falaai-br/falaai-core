@@ -8,7 +8,7 @@ import 'api/types.dart';
 import 'frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `block_on`, `disposition`, `lock`, `receive`, `subscribe`, `transport`, `with_sessions`, `with_sessions`
+// These functions are ignored because they are not marked as `pub`: `attempt`, `block_on`, `classify`, `disposition`, `lock`, `notify`, `receive`, `subscribe`, `transmit`, `transport`, `wake_courier`, `with_sessions`, `with_sessions`
 
 /// Gera a chave de 32 bytes do banco local com o CSPRNG do Rust, para a primeira abertura. Não
 /// precisa de núcleo aberto. O app guarda os bytes no Keychain/Keystore, sem cópia em outro lugar,
@@ -34,14 +34,21 @@ abstract class FalaaiCore implements RustOpaqueInterface {
   /// (adulterado, duplicado, de identidade não confiável) também é confirmado e descartado; um
   /// que falhou por causa local (sem assinante, banco ocupado) fica na fila e volta na próxima
   /// conexão. Conectar de novo troca a conexão anterior.
+  ///
+  /// Conectado, o núcleo também esvazia a outbox ([`Self::send_message`]) em segundo plano, e
+  /// volta a esvaziá-la a cada reconexão.
   Future<void> connect({required ServerConfig server, required String token});
 
   /// Abre e decifra um envelope selado, grava a mensagem no banco local e entrega o texto, com o
   /// remetente tirado do certificado, no stream de [`Self::events`] como
-  /// [`ChatEvent::MessageReceived`]. `server_timestamp` é o do `Deliver` (milissegundos desde a
-  /// época Unix): o certificado de remetente tem de valer nesse instante, então uma mensagem que
-  /// esperou na fila ainda abre. `Ok` quer dizer que a mensagem foi gravada e o evento entregue,
-  /// e o envelope pode ser confirmado ao servidor.
+  /// [`ChatEvent::MessageReceived`]. `client_message_id` e `server_timestamp` vêm do `Deliver`
+  /// (milissegundos desde a época Unix): o certificado de remetente tem de valer nesse instante,
+  /// então uma mensagem que esperou na fila ainda abre. `Ok` quer dizer que a mensagem foi
+  /// gravada e o evento entregue, e o envelope pode ser confirmado ao servidor.
+  ///
+  /// Um reenvio de mensagem já gravada (mesmo remetente e mesmo `client_message_id`, que não
+  /// pode ser vazio para isso) avança o ratchet, mas não grava nem emite evento: falha com
+  /// [`CoreError::DuplicateMessage`], como o mesmo envelope decifrado duas vezes.
   ///
   /// Decifrar, gravar e entregar são atômicos: sem assinante, ou com o stream fechado na
   /// entrega, falha com [`CoreError::NoEventListener`], nada é gravado e o ratchet não avança,
@@ -50,10 +57,12 @@ abstract class FalaaiCore implements RustOpaqueInterface {
   /// e o envelope fica para depois.
   Future<void> decrypt({
     required Envelope envelope,
+    required List<int> clientMessageId,
     required BigInt serverTimestamp,
   });
 
-  /// Fecha a conexão com o servidor. Sem efeito se não houver.
+  /// Fecha a conexão com o servidor e para a outbox, que guarda o que não foi enviado. Sem
+  /// efeito se não houver conexão.
   Future<void> disconnect();
 
   /// Cifra `plaintext` para `peer` e sela com o certificado de remetente; o resultado vai em
@@ -121,6 +130,23 @@ abstract class FalaaiCore implements RustOpaqueInterface {
     required Envelope envelope,
   });
 
+  /// Põe `body` na outbox para `peer` e devolve o `client_message_id` (16 bytes, um UUID) que
+  /// a identifica. Funciona sem conexão: a mensagem fica no banco local, sobrevive a fechar o
+  /// app e sai quando houver [`Self::connect`].
+  ///
+  /// Conectado, o núcleo envia as mensagens na ordem em que entraram, cifrando cada tentativa
+  /// de novo, como [`Self::encrypt`] e [`Self::send`] fariam. Falha passageira (rede, limite de
+  /// taxa, banco ocupado, certificado de remetente vencido) para a fila e tenta de novo com
+  /// backoff exponencial, de 1s até 5min; reconectar ou entregar um certificado novo tenta na
+  /// hora. O resultado chega no stream de [`Self::events`]: [`ChatEvent::MessageSent`] quando o
+  /// servidor gravou na fila do destinatário, [`ChatEvent::MessageFailed`] quando reenviar não
+  /// adianta (sem sessão, identidade não confiável, destinatário inexistente, envelope
+  /// recusado). Sem assinante, o evento fica guardado e sai quando houver um.
+  Future<Uint8List> sendMessage({
+    required DeviceAddress peer,
+    required List<int> body,
+  });
+
   /// Grava o endereço que o servidor atribuiu a este dispositivo no registro e libera as
   /// sessões. Exige [`Self::generate_account_keys`] antes; repetir o mesmo endereço não muda
   /// nada.
@@ -128,8 +154,9 @@ abstract class FalaaiCore implements RustOpaqueInterface {
 
   /// Entrega o certificado de remetente que o `accounts` emitiu para este dispositivo. Ele vale
   /// pouco tempo (24h) e fica só em memória: o app o guarda, entrega de novo ao abrir o núcleo e
-  /// pede outro quando [`Self::encrypt`] falhar com [`CoreError::NoSenderCertificate`]. Falha
-  /// com [`CoreError::InvalidSenderCertificate`] se o certificado não encadeia até o trust
-  /// root, já venceu ou é de outro dispositivo ou identidade.
+  /// pede outro quando [`Self::encrypt`] falhar com [`CoreError::NoSenderCertificate`]. Sem
+  /// certificado válido a outbox fica parada; o novo a destrava na hora. Falha com
+  /// [`CoreError::InvalidSenderCertificate`] se o certificado não encadeia até o trust root, já
+  /// venceu ou é de outro dispositivo ou identidade.
   Future<void> setSenderCertificate({required List<int> certificate});
 }

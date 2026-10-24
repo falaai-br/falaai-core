@@ -3,6 +3,7 @@
 
 use std::fmt;
 
+use super::error::CoreError;
 use crate::messaging::InboxMessage;
 use crate::protocol::keys;
 use crate::protocol::{self, Address, ProtocolError, PublicPreKey, SignedPublicPreKey};
@@ -218,6 +219,21 @@ pub enum ChatEvent {
         /// Texto decifrado.
         body: Vec<u8>,
     },
+    /// O servidor gravou na fila do destinatário uma mensagem de
+    /// [`super::FalaaiCore::send_message`]; ela saiu da outbox.
+    MessageSent {
+        /// O id que `send_message` devolveu.
+        client_message_id: Vec<u8>,
+    },
+    /// Uma mensagem de [`super::FalaaiCore::send_message`] foi recusada e saiu da outbox sem
+    /// ser enviada; reenviar igual não adianta.
+    MessageFailed {
+        /// O id que `send_message` devolveu.
+        client_message_id: Vec<u8>,
+        /// Por quê: [`CoreError::SessionNotFound`], [`CoreError::UntrustedIdentity`],
+        /// [`CoreError::UnknownDestination`] ou [`CoreError::InvalidEnvelope`].
+        error: CoreError,
+    },
 }
 
 impl fmt::Debug for ChatEvent {
@@ -229,6 +245,11 @@ impl fmt::Debug for ChatEvent {
                 .field("from", from)
                 .field("len", &body.len())
                 .finish(),
+            Self::MessageSent { .. } => f.write_str("MessageSent"),
+            Self::MessageFailed { error, .. } => f
+                .debug_struct("MessageFailed")
+                .field("error", error)
+                .finish_non_exhaustive(),
         }
     }
 }

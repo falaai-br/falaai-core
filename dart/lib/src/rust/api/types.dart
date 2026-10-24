@@ -4,6 +4,7 @@
 // ignore_for_file: invalid_use_of_internal_member, unused_import, unnecessary_import
 
 import '../frb_generated.dart';
+import 'error.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
 part 'types.freezed.dart';
@@ -77,6 +78,24 @@ sealed class ChatEvent with _$ChatEvent {
     /// Texto decifrado.
     required Uint8List body,
   }) = ChatEvent_MessageReceived;
+
+  /// O servidor gravou na fila do destinatário uma mensagem de
+  /// [`super::FalaaiCore::send_message`]; ela saiu da outbox.
+  const factory ChatEvent.messageSent({
+    /// O id que `send_message` devolveu.
+    required Uint8List clientMessageId,
+  }) = ChatEvent_MessageSent;
+
+  /// Uma mensagem de [`super::FalaaiCore::send_message`] foi recusada e saiu da outbox sem
+  /// ser enviada; reenviar igual não adianta.
+  const factory ChatEvent.messageFailed({
+    /// O id que `send_message` devolveu.
+    required Uint8List clientMessageId,
+
+    /// Por quê: [`CoreError::SessionNotFound`], [`CoreError::UntrustedIdentity`],
+    /// [`CoreError::UnknownDestination`] ou [`CoreError::InvalidEnvelope`].
+    required CoreError error,
+  }) = ChatEvent_MessageFailed;
 }
 
 /// Dispositivo de uma conta: ACI (UUID em texto) e device id (1 a 127).

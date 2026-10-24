@@ -1,9 +1,17 @@
-//! Mensagens guardadas no banco local.
+//! Mensagens guardadas no banco local: as recebidas ([`Inbox`]) e as que esperam envio
+//! ([`outbox`]).
 //!
 //! Uma mensagem recebida é gravada dentro da transação que a decifra (o `deliver` de
 //! [`crate::protocol::Sessions::decrypt`]): ratchet e mensagem avançam juntos ou nenhum. Assim
 //! o que a Notification Service Extension do iOS decifra fica no banco para o app, que não
 //! recebe o evento dela.
+//!
+//! A entrega é at-least-once e quem envia reenvia quando não vê o `SendAck`, então a mesma
+//! mensagem pode chegar mais de uma vez. O mesmo envelope (mesmo `seq`) o ratchet recusa; um
+//! reenvio, cifrado de novo, o ratchet aceita, e quem o reconhece é o `client_message_id` gravado
+//! junto com a mensagem.
+
+pub(crate) mod outbox;
 
 use std::sync::Arc;
 
@@ -35,23 +43,34 @@ impl Inbox {
         Self { db }
     }
 
-    /// Grava a mensagem que `from` enviou e devolve o id dela. Dentro da transação de
+    /// Grava a mensagem que `from` enviou com `client_message_id` e devolve o id dela, ou `None`
+    /// se `from` já tinha enviado uma mensagem com esse `client_message_id` (um reenvio), sem
+    /// gravar nada. Um `client_message_id` vazio não deduplica. Dentro da transação de
     /// [`Database::begin`], só vale se ela for confirmada.
     pub(crate) fn record(
         &self,
         from: &Address,
+        client_message_id: &[u8],
         server_timestamp: u64,
         body: &[u8],
-    ) -> Result<i64, StorageError> {
+    ) -> Result<Option<i64>, StorageError> {
         let server_timestamp = i64::try_from(server_timestamp).map_err(|_| StorageError::Sqlite)?;
+        let client_message_id = (!client_message_id.is_empty()).then_some(client_message_id);
         self.db.with(|c| {
-            c.execute(
+            let inserted = c.execute(
                 "INSERT INTO received_messages
-                     (sender_aci, sender_device_id, server_timestamp, body)
-                 VALUES (?1, ?2, ?3, ?4)",
-                params![from.aci(), from.device_id(), server_timestamp, body],
+                     (sender_aci, sender_device_id, client_message_id, server_timestamp, body)
+                 VALUES (?1, ?2, ?3, ?4, ?5)
+                 ON CONFLICT (sender_aci, sender_device_id, client_message_id) DO NOTHING",
+                params![
+                    from.aci(),
+                    from.device_id(),
+                    client_message_id,
+                    server_timestamp,
+                    body
+                ],
             )?;
-            Ok(c.last_insert_rowid())
+            Ok((inserted > 0).then(|| c.last_insert_rowid()))
         })
     }
 
@@ -63,14 +82,6 @@ impl Inbox {
                  FROM received_messages WHERE id > ?1 ORDER BY id LIMIT ?2",
             )?;
             let rows = select.query_map(params![after, limit], |row| {
-                // Só o próprio núcleo grava a tabela; um valor fora da forma é banco corrompido.
-                let corrupt = |column, kind| {
-                    rusqlite::Error::FromSqlConversionFailure(
-                        column,
-                        kind,
-                        Box::new(FromSqlError::InvalidType),
-                    )
-                };
                 let aci: String = row.get(1)?;
                 let from = Address::new(&aci, row.get(2)?).map_err(|_| corrupt(1, Type::Text))?;
                 let server_timestamp =
@@ -85,6 +96,12 @@ impl Inbox {
             rows.collect()
         })
     }
+}
+
+/// Valor fora da forma numa coluna: só o próprio núcleo grava as tabelas, então é banco
+/// corrompido.
+fn corrupt(column: usize, kind: Type) -> rusqlite::Error {
+    rusqlite::Error::FromSqlConversionFailure(column, kind, Box::new(FromSqlError::InvalidType))
 }
 
 #[cfg(test)]
@@ -109,8 +126,12 @@ mod tests {
     fn grava_e_le_em_ordem_a_partir_do_cursor() -> TestResult {
         let inbox = inbox()?;
         let from = Address::new(ACI, 3)?;
-        let first = inbox.record(&from, 1_000, b"um")?;
-        let second = inbox.record(&from, 900, b"dois")?;
+        let first = inbox
+            .record(&from, &[], 1_000, b"um")?
+            .ok_or("não gravou")?;
+        let second = inbox
+            .record(&from, &[], 900, b"dois")?
+            .ok_or("não gravou")?;
         assert!(second > first);
 
         let all = inbox.after(0, 10)?;
@@ -130,7 +151,7 @@ mod tests {
         let inbox = inbox()?;
         let from = Address::new(ACI, 1)?;
         for body in [b"a", b"b", b"c"] {
-            inbox.record(&from, 1, body)?;
+            inbox.record(&from, &[], 1, body)?;
         }
         let page = inbox.after(0, 2)?;
         assert_eq!(texts(&page), [&b"a"[..], b"b"]);
@@ -145,11 +166,13 @@ mod tests {
         let inbox = inbox()?;
         let from = Address::new(ACI, 1)?;
         inbox.db.begin()?;
-        let undone = inbox.record(&from, 1, b"desfeita")?;
+        let undone = inbox
+            .record(&from, &[], 1, b"desfeita")?
+            .ok_or("não gravou")?;
         inbox.db.rollback()?;
         assert!(inbox.after(0, 10)?.is_empty());
         // O id desfeito volta a ser usado: a mensagem reentregue fica com o mesmo cursor.
-        assert_eq!(inbox.record(&from, 1, b"reentregue")?, undone);
+        assert_eq!(inbox.record(&from, &[], 1, b"reentregue")?, Some(undone));
         Ok(())
     }
 
@@ -157,11 +180,40 @@ mod tests {
     fn id_nao_volta_depois_de_apagar_a_ultima() -> TestResult {
         let inbox = inbox()?;
         let from = Address::new(ACI, 1)?;
-        let deleted = inbox.record(&from, 1, b"efemera")?;
+        let deleted = inbox
+            .record(&from, &[], 1, b"efemera")?
+            .ok_or("não gravou")?;
         inbox
             .db
             .with(|c| c.execute("DELETE FROM received_messages", []))?;
-        assert!(inbox.record(&from, 1, b"nova")? > deleted);
+        assert!(inbox.record(&from, &[], 1, b"nova")?.ok_or("não gravou")? > deleted);
+        Ok(())
+    }
+
+    #[test]
+    fn reenvio_com_o_mesmo_client_message_id_nao_e_gravado() -> TestResult {
+        let inbox = inbox()?;
+        let from = Address::new(ACI, 1)?;
+        let id = [7; 16];
+        assert!(inbox.record(&from, &id, 1, b"oi")?.is_some());
+        assert_eq!(inbox.record(&from, &id, 2, b"oi")?, None);
+        assert_eq!(texts(&inbox.after(0, 10)?), [&b"oi"[..]]);
+        Ok(())
+    }
+
+    #[test]
+    fn mesmo_client_message_id_de_outro_remetente_ou_vazio_e_gravado() -> TestResult {
+        let inbox = inbox()?;
+        let id = [7; 16];
+        let from = Address::new(ACI, 1)?;
+        let other_device = Address::new(ACI, 2)?;
+        let other_account = Address::new("0f0e0d0c-0000-4000-8000-000000000000", 1)?;
+        for sender in [&from, &other_device, &other_account] {
+            assert!(inbox.record(sender, &id, 1, b"oi")?.is_some());
+        }
+        assert!(inbox.record(&from, &[], 1, b"sem id")?.is_some());
+        assert!(inbox.record(&from, &[], 1, b"sem id")?.is_some());
+        assert_eq!(inbox.after(0, 10)?.len(), 5);
         Ok(())
     }
 
@@ -170,7 +222,7 @@ mod tests {
         let inbox = inbox()?;
         let from = Address::new(ACI, 1)?;
         assert_eq!(
-            inbox.record(&from, u64::MAX, b"oi"),
+            inbox.record(&from, &[], u64::MAX, b"oi"),
             Err(StorageError::Sqlite)
         );
         Ok(())

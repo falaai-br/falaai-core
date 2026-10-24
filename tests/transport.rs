@@ -15,10 +15,10 @@ use std::time::Duration;
 use common::{Device, TestResult, accounts, now_millis};
 use falaai_core::api::error::CoreError;
 use falaai_core::api::test_support::unidentified_access_key;
-use falaai_core::api::types::ServerConfig;
+use falaai_core::api::types::{ChatEvent, DeviceAddress, ServerConfig};
 use uuid::Uuid;
 
-use self::fake::{Gateway, Socket};
+use self::fake::{Fault, Gateway, Socket};
 
 /// Quanto o teste espera por algo que acontece em segundo plano.
 const WAIT: Duration = Duration::from_secs(10);
@@ -74,6 +74,31 @@ impl World {
         let (from, body) = self.bob.next_message(WAIT)?;
         assert_eq!(from, self.alice.address);
         assert_eq!(body, text);
+        Ok(())
+    }
+
+    /// Alice põe `text` para Bob na outbox; devolve o `client_message_id`.
+    fn alice_posts(&self, text: &[u8]) -> Result<Vec<u8>, CoreError> {
+        self.alice
+            .core()
+            .send_message(self.bob.address.clone(), text.to_vec())
+    }
+
+    /// O próximo evento de Alice diz que o servidor aceitou a mensagem `id`.
+    fn alice_hears_sent(&self, id: &[u8]) -> TestResult {
+        match self.alice.next_event(WAIT)? {
+            ChatEvent::MessageSent { client_message_id } => {
+                assert_eq!(client_message_id, id);
+                Ok(())
+            }
+            other => Err(format!("esperava MessageSent, veio {other:?}").into()),
+        }
+    }
+
+    /// Bob não recebe mais nada por um tempo.
+    fn bob_hears_nothing_more(&self) -> TestResult {
+        std::thread::sleep(Duration::from_millis(500));
+        assert!(self.bob.no_events(), "Bob recebeu uma cópia");
         Ok(())
     }
 }
@@ -271,6 +296,173 @@ fn entrega_com_stream_fechado_nao_avanca_o_ratchet_e_a_reentrega_abre() -> TestR
 }
 
 #[test]
+fn outbox_envia_e_avisa_que_o_servidor_aceitou() -> TestResult {
+    let world = World::new()?;
+    world
+        .alice
+        .core()
+        .set_peer_profile_key(&world.bob.address, &BOB_PROFILE_KEY)?;
+
+    let id = world.alice_posts(b"oi, bob")?;
+    assert_eq!(id.len(), 16);
+    world.bob_receives(b"oi, bob")?;
+    world.alice_hears_sent(&id)?;
+
+    let sends = world.server.sends();
+    let [send] = sends.as_slice() else {
+        return Err(format!("{} sends", sends.len()).into());
+    };
+    assert_eq!(send.socket, Socket::Unidentified);
+    assert_eq!(send.client_message_id, id);
+    assert_no_sender(&world.server, &world.alice)?;
+    Ok(())
+}
+
+#[test]
+fn outbox_envia_na_ordem_em_que_as_mensagens_entraram() -> TestResult {
+    let world = World::new()?;
+    let texts: [&[u8]; 3] = [b"um", b"dois", b"tres"];
+    let ids = texts
+        .iter()
+        .map(|text| world.alice_posts(text))
+        .collect::<Result<Vec<_>, _>>()?;
+    for text in texts {
+        world.bob_receives(text)?;
+    }
+    for id in &ids {
+        world.alice_hears_sent(id)?;
+    }
+    let sent: Vec<Vec<u8>> = world
+        .server
+        .sends()
+        .into_iter()
+        .map(|send| send.client_message_id)
+        .collect();
+    assert_eq!(sent, ids);
+    Ok(())
+}
+
+#[test]
+fn sendack_perdido_reenvia_com_o_mesmo_id_e_o_receptor_descarta_a_copia() -> TestResult {
+    let world = World::new()?;
+    world
+        .alice
+        .core()
+        .set_peer_profile_key(&world.bob.address, &BOB_PROFILE_KEY)?;
+    // O servidor grava na fila de Bob, mas Alice não vê o aceite e tenta de novo.
+    world.server.inject(Fault::AcceptButRateLimit);
+
+    let id = world.alice_posts(b"so uma vez")?;
+    world.bob_receives(b"so uma vez")?;
+    world.alice_hears_sent(&id)?;
+
+    let sends = world.server.sends();
+    assert_eq!(sends.len(), 2);
+    assert!(sends.iter().all(|send| send.client_message_id == id));
+    // Cada tentativa cifra de novo: o ratchet sozinho não reconheceria a cópia.
+    assert_ne!(sends[0].content, sends[1].content);
+    // As duas entregas são confirmadas, e a cópia não vira mensagem.
+    world.server.wait_acked(2)?;
+    world.bob_hears_nothing_more()?;
+    assert_eq!(world.bob.core().received_messages(0, 10)?.len(), 1);
+
+    // A conversa segue.
+    let next = world.alice_posts(b"e a proxima")?;
+    world.bob_receives(b"e a proxima")?;
+    world.alice_hears_sent(&next)?;
+    Ok(())
+}
+
+#[test]
+fn conexao_caida_no_envio_reenvia_depois_de_reconectar() -> TestResult {
+    let world = World::new()?;
+    // Sem a profile key de Bob, o envio vai pelo socket autenticado, que cai no `Send`.
+    world.server.inject(Fault::Drop);
+
+    let id = world.alice_posts(b"depois da queda")?;
+    world.bob_receives(b"depois da queda")?;
+    world.alice_hears_sent(&id)?;
+
+    let sends = world.server.sends();
+    assert_eq!(sends.len(), 2);
+    assert!(
+        sends
+            .iter()
+            .all(|send| send.socket == Socket::Authenticated)
+    );
+    assert!(sends.iter().all(|send| send.client_message_id == id));
+    world.bob_hears_nothing_more()?;
+    Ok(())
+}
+
+#[test]
+fn mensagem_posta_sem_conexao_sai_ao_conectar_mesmo_depois_de_reabrir() -> TestResult {
+    let mut world = World::new()?;
+    world.alice.core().disconnect();
+    let first = world.alice_posts(b"offline 1")?;
+    let second = world.alice_posts(b"offline 2")?;
+    std::thread::sleep(Duration::from_millis(200));
+    assert!(world.server.sends().is_empty());
+
+    // O app foi fechado e aberto de novo.
+    world.alice.reopen()?;
+    world
+        .alice
+        .core()
+        .connect(world.server.config(), token(&world.alice))?;
+    world.bob_receives(b"offline 1")?;
+    world.bob_receives(b"offline 2")?;
+    world.alice_hears_sent(&first)?;
+    world.alice_hears_sent(&second)?;
+    Ok(())
+}
+
+#[test]
+fn sem_sessao_a_mensagem_falha_e_sai_da_outbox() -> TestResult {
+    let world = World::new()?;
+    let stranger = DeviceAddress {
+        aci: common::aci(0xC0),
+        device_id: 1,
+    };
+    let id = world
+        .alice
+        .core()
+        .send_message(stranger, b"para quem?".to_vec())?;
+    match world.alice.next_event(WAIT)? {
+        ChatEvent::MessageFailed {
+            client_message_id,
+            error,
+        } => {
+            assert_eq!(client_message_id, id);
+            assert_eq!(error, CoreError::SessionNotFound);
+        }
+        other => return Err(format!("esperava MessageFailed, veio {other:?}").into()),
+    }
+    assert!(world.server.sends().is_empty());
+
+    // A recusa não para a fila: a próxima mensagem sai.
+    let next = world.alice_posts(b"oi, bob")?;
+    world.bob_receives(b"oi, bob")?;
+    world.alice_hears_sent(&next)?;
+    Ok(())
+}
+
+#[test]
+fn resultado_sem_assinante_chega_quando_alguem_assina() -> TestResult {
+    let mut world = World::new()?;
+    world.alice.close_events();
+
+    let id = world.alice_posts(b"oi, bob")?;
+    world.bob_receives(b"oi, bob")?;
+    std::thread::sleep(Duration::from_millis(200));
+
+    world.alice.subscribe();
+    world.alice_hears_sent(&id)?;
+    assert_eq!(world.server.sends().len(), 1);
+    Ok(())
+}
+
+#[test]
 fn certificado_de_remetente_vem_do_accounts() -> TestResult {
     let world = World::new()?;
     let certificate = world.alice.core().fetch_sender_certificate()?;
@@ -345,7 +537,7 @@ fn configuracao_sem_tls_fora_do_loopback_e_recusada() -> TestResult {
 
 /// Gateway e `accounts` de teste.
 mod fake {
-    use std::collections::HashMap;
+    use std::collections::{HashMap, VecDeque};
     use std::error::Error;
     use std::io::{ErrorKind, Read, Write};
     use std::net::{TcpListener, TcpStream};
@@ -420,6 +612,7 @@ mod fake {
         }
 
         pub const ACCEPTED: i32 = 1;
+        pub const RATE_LIMITED: i32 = 4;
         pub const UNAUTHORIZED: i32 = 5;
 
         #[derive(Clone, PartialEq, prost::Message)]
@@ -443,6 +636,16 @@ mod fake {
             #[prost(uint64, tag = "1")]
             pub id: u64,
         }
+    }
+
+    /// Falha que o servidor aplica ao próximo `Send`.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum Fault {
+        /// Grava na fila do destinatário, mas responde `RATE_LIMITED`: para quem envia, é como
+        /// se o `SendAck` se perdesse.
+        AcceptButRateLimit,
+        /// Derruba a conexão sem gravar nada.
+        Drop,
     }
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -483,6 +686,7 @@ mod fake {
         sends: Vec<CapturedSend>,
         acked: Vec<u64>,
         unidentified_handshakes: Vec<Vec<(String, String)>>,
+        faults: VecDeque<Fault>,
     }
 
     pub struct Gateway {
@@ -590,6 +794,11 @@ mod fake {
 
         pub fn acked(&self) -> Vec<u64> {
             lock(&self.state).acked.clone()
+        }
+
+        /// Aplica `fault` ao próximo `Send`, de qualquer socket.
+        pub fn inject(&self, fault: Fault) {
+            lock(&self.state).faults.push_back(fault);
         }
 
         pub fn sends(&self) -> Vec<CapturedSend> {
@@ -729,9 +938,18 @@ mod fake {
             };
             let frame = proto::Frame::decode(bytes.as_ref())?;
             let answer = match frame.payload.ok_or("frame vazio")? {
-                proto::Payload::Send(send) => Some(proto::Payload::SendAck(accept(
-                    state, socket, &bytes, send,
-                )?)),
+                proto::Payload::Send(send) => {
+                    let fault = lock(state).faults.pop_front();
+                    if fault == Some(Fault::Drop) {
+                        capture(state, socket, &bytes, &send)?;
+                        return Ok(());
+                    }
+                    let mut ack = accept(state, socket, &bytes, send)?;
+                    if fault == Some(Fault::AcceptButRateLimit) {
+                        ack.status = proto::RATE_LIMITED;
+                    }
+                    Some(proto::Payload::SendAck(ack))
+                }
                 proto::Payload::Ack(ack) => {
                     let mut state = lock(state);
                     state.acked.push(ack.seq);
@@ -752,21 +970,20 @@ mod fake {
         }
     }
 
-    /// Grava o `Send` e enfileira o envelope para o destinatário, se autorizado.
-    fn accept(
+    /// Grava o `Send` como chegou; devolve o envelope e o destinatário.
+    fn capture(
         state: &Arc<Mutex<State>>,
         socket: Socket,
         frame: &[u8],
-        send: proto::Send,
-    ) -> Result<proto::SendAck, Box<dyn Error>> {
+        send: &proto::Send,
+    ) -> Result<(proto::Envelope, [u8; 16]), Box<dyn Error>> {
         let envelope = send.envelope.clone().ok_or("send sem envelope")?;
         let destination_aci: [u8; 16] = send
             .destination_aci
             .as_slice()
             .try_into()
             .map_err(|_| "aci com tamanho errado")?;
-        let mut state = lock(state);
-        state.sends.push(CapturedSend {
+        lock(state).sends.push(CapturedSend {
             socket,
             frame: frame.to_vec(),
             destination_aci,
@@ -774,6 +991,18 @@ mod fake {
             client_message_id: envelope.client_message_id.clone(),
             content: envelope.content.clone(),
         });
+        Ok((envelope, destination_aci))
+    }
+
+    /// Grava o `Send` e enfileira o envelope para o destinatário, se autorizado.
+    fn accept(
+        state: &Arc<Mutex<State>>,
+        socket: Socket,
+        frame: &[u8],
+        send: proto::Send,
+    ) -> Result<proto::SendAck, Box<dyn Error>> {
+        let (envelope, destination_aci) = capture(state, socket, frame, &send)?;
+        let mut state = lock(state);
         let authorized = socket == Socket::Authenticated
             || state.access_keys.get(&destination_aci) == Some(&send.unidentified_access_key);
         if !authorized {

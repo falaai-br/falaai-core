@@ -12,8 +12,14 @@
 //!
 //! O transporte também é do núcleo: o app não abre socket nem HTTPS. [`FalaaiCore::connect`]
 //! abre o socket autenticado, que recebe, decifra, grava e confirma envelopes em segundo plano;
-//! [`FalaaiCore::send`] envia pelo socket não autenticado sempre que tem a unidentified access
-//! key do destinatário (ADR-0010).
+//! os envios vão pelo socket não autenticado sempre que há a unidentified access key do
+//! destinatário (ADR-0010).
+//!
+//! Para enviar, o app põe a mensagem na outbox com [`FalaaiCore::send_message`], conectado ou
+//! não. Enquanto conectado, o núcleo cifra e envia em ordem, tenta de novo com backoff
+//! exponencial o que falhou por rede, reenvia logo depois de reconectar e avisa o resultado no
+//! stream de eventos. Todo reenvio leva o mesmo `client_message_id`, e o receptor descarta a
+//! cópia: nada se perde nem chega duas vezes.
 //!
 //! Toda mensagem recebida é gravada no banco local na mesma transação que avança o ratchet, por
 //! quem a decifrar: o app ou a Notification Service Extension do iOS. O evento só chega ao
@@ -30,7 +36,7 @@ pub mod types;
 
 use std::future::Future;
 use std::path::Path;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::task::{Context, Poll, Wake, Waker};
 use std::thread::{self, Thread};
 
@@ -44,16 +50,17 @@ use self::types::{
 };
 use crate::frb_generated::StreamSink;
 use crate::messaging::Inbox;
+use crate::messaging::outbox::{
+    self, Attempt, AttemptFn, BACKOFF, CLIENT_MESSAGE_ID_LEN, Courier, NotifyFn, Outbox, Outcome,
+    Rejection,
+};
 use crate::protocol::access::AccessKey;
 use crate::protocol::certificate::TrustRoot;
 use crate::protocol::signal::LibsignalSessions;
 use crate::protocol::store::{SqliteStore, SqliteStores};
 use crate::protocol::{self, Address, Sessions};
 use crate::storage::{Database, DatabaseKey};
-use crate::transport::{Credentials, Disposition, Outgoing, Server, Transport};
-
-/// Tamanho do `client_message_id`: um UUID.
-const CLIENT_MESSAGE_ID_LEN: usize = 16;
+use crate::transport::{Credentials, Disposition, Incoming, Outgoing, Server, Transport};
 
 /// Gera a chave de 32 bytes do banco local com o CSPRNG do Rust, para a primeira abertura. Não
 /// precisa de núcleo aberto. O app guarda os bytes no Keychain/Keystore, sem cópia em outro lugar,
@@ -68,6 +75,7 @@ pub struct FalaaiCore {
     db: Arc<Database>,
     store: SqliteStore,
     inbox: Inbox,
+    outbox: Outbox,
     trust_root: TrustRoot,
     /// Vazio até o endereço local ser conhecido: a libsignal precisa dele nas sessões.
     /// Compartilhado com a thread do socket autenticado, que decifra o que chega.
@@ -75,6 +83,8 @@ pub struct FalaaiCore {
     events: Arc<Mutex<Option<Deliver>>>,
     /// Conexão com o servidor, depois de [`Self::connect`].
     transport: Mutex<Option<Arc<Transport>>>,
+    /// Thread que esvazia a outbox, enquanto há conexão.
+    courier: Mutex<Option<Courier>>,
 }
 
 type CoreSessions = LibsignalSessions<SqliteStores>;
@@ -99,6 +109,7 @@ impl FalaaiCore {
         let db = Arc::new(Database::open(Path::new(&db_path), &key)?);
         let store = SqliteStore::new(db.clone());
         let inbox = Inbox::new(db.clone());
+        let outbox = Outbox::new(db.clone());
         let sessions = store.local_address()?.map(|local| {
             LibsignalSessions::new(local, trust_root.clone(), SqliteStores::new(db.clone()))
         });
@@ -106,10 +117,12 @@ impl FalaaiCore {
             db,
             store,
             inbox,
+            outbox,
             trust_root,
             sessions: Arc::new(Mutex::new(sessions)),
             events: Arc::new(Mutex::new(None)),
             transport: Mutex::new(None),
+            courier: Mutex::new(None),
         })
     }
 
@@ -139,11 +152,14 @@ impl FalaaiCore {
 
     /// Entrega o certificado de remetente que o `accounts` emitiu para este dispositivo. Ele vale
     /// pouco tempo (24h) e fica só em memória: o app o guarda, entrega de novo ao abrir o núcleo e
-    /// pede outro quando [`Self::encrypt`] falhar com [`CoreError::NoSenderCertificate`]. Falha
-    /// com [`CoreError::InvalidSenderCertificate`] se o certificado não encadeia até o trust
-    /// root, já venceu ou é de outro dispositivo ou identidade.
+    /// pede outro quando [`Self::encrypt`] falhar com [`CoreError::NoSenderCertificate`]. Sem
+    /// certificado válido a outbox fica parada; o novo a destrava na hora. Falha com
+    /// [`CoreError::InvalidSenderCertificate`] se o certificado não encadeia até o trust root, já
+    /// venceu ou é de outro dispositivo ou identidade.
     pub fn set_sender_certificate(&self, certificate: Vec<u8>) -> Result<(), CoreError> {
-        self.with_sessions(|sessions| block_on(sessions.set_sender_certificate(&certificate)))
+        self.with_sessions(|sessions| block_on(sessions.set_sender_certificate(&certificate)))?;
+        self.wake_courier();
+        Ok(())
     }
 
     /// Abre sessão com `peer` a partir do bundle de pré-chaves que ele publicou (PQXDH).
@@ -169,24 +185,33 @@ impl FalaaiCore {
 
     /// Abre e decifra um envelope selado, grava a mensagem no banco local e entrega o texto, com o
     /// remetente tirado do certificado, no stream de [`Self::events`] como
-    /// [`ChatEvent::MessageReceived`]. `server_timestamp` é o do `Deliver` (milissegundos desde a
-    /// época Unix): o certificado de remetente tem de valer nesse instante, então uma mensagem que
-    /// esperou na fila ainda abre. `Ok` quer dizer que a mensagem foi gravada e o evento entregue,
-    /// e o envelope pode ser confirmado ao servidor.
+    /// [`ChatEvent::MessageReceived`]. `client_message_id` e `server_timestamp` vêm do `Deliver`
+    /// (milissegundos desde a época Unix): o certificado de remetente tem de valer nesse instante,
+    /// então uma mensagem que esperou na fila ainda abre. `Ok` quer dizer que a mensagem foi
+    /// gravada e o evento entregue, e o envelope pode ser confirmado ao servidor.
+    ///
+    /// Um reenvio de mensagem já gravada (mesmo remetente e mesmo `client_message_id`, que não
+    /// pode ser vazio para isso) avança o ratchet, mas não grava nem emite evento: falha com
+    /// [`CoreError::DuplicateMessage`], como o mesmo envelope decifrado duas vezes.
     ///
     /// Decifrar, gravar e entregar são atômicos: sem assinante, ou com o stream fechado na
     /// entrega, falha com [`CoreError::NoEventListener`], nada é gravado e o ratchet não avança,
     /// então o mesmo envelope decifra de novo. Enquanto o app ou a extensão de notificação
     /// decifra, o outro processo espera; passado o timeout, falha com [`CoreError::DatabaseBusy`]
     /// e o envelope fica para depois.
-    pub fn decrypt(&self, envelope: Envelope, server_timestamp: u64) -> Result<(), CoreError> {
-        receive(
-            &self.sessions,
-            &self.inbox,
-            &self.events,
-            &protocol::Ciphertext::from(envelope),
+    pub fn decrypt(
+        &self,
+        envelope: Envelope,
+        client_message_id: Vec<u8>,
+        server_timestamp: u64,
+    ) -> Result<(), CoreError> {
+        let content = protocol::Ciphertext::from(envelope);
+        let incoming = Incoming {
+            content: content.body(),
+            client_message_id: &client_message_id,
             server_timestamp,
-        )
+        };
+        receive(&self.sessions, &self.inbox, &self.events, incoming)
     }
 
     /// `true` se outro processo gravou no banco desde a última chamada ou, na primeira, desde a
@@ -223,6 +248,9 @@ impl FalaaiCore {
     /// (adulterado, duplicado, de identidade não confiável) também é confirmado e descartado; um
     /// que falhou por causa local (sem assinante, banco ocupado) fica na fila e volta na próxima
     /// conexão. Conectar de novo troca a conexão anterior.
+    ///
+    /// Conectado, o núcleo também esvazia a outbox ([`Self::send_message`]) em segundo plano, e
+    /// volta a esvaziá-la a cada reconexão.
     pub fn connect(&self, server: ServerConfig, token: String) -> Result<(), CoreError> {
         let token = Zeroizing::new(token);
         let server = Server::new(
@@ -237,17 +265,59 @@ impl FalaaiCore {
             self.inbox.clone(),
             self.events.clone(),
         );
-        let transport = Transport::connect(&server, credentials, move |content, timestamp| {
-            let envelope = protocol::Ciphertext::new(content.to_vec());
-            disposition(receive(&sessions, &inbox, &events, &envelope, timestamp))
-        })?;
-        *lock(&self.transport) = Some(Arc::new(transport));
+        let (wake, signals) = outbox::channel();
+        let reconnected = wake.clone();
+        let transport = Arc::new(Transport::connect(
+            &server,
+            credentials,
+            move |incoming| disposition(receive(&sessions, &inbox, &events, incoming)),
+            move || reconnected.retry(),
+        )?);
+        let courier = Courier::start(
+            self.outbox.clone(),
+            (wake, signals),
+            BACKOFF,
+            attempt(
+                self.sessions.clone(),
+                self.store.clone(),
+                Arc::downgrade(&transport),
+            ),
+            notify(self.events.clone()),
+        )
+        .map_err(|_| CoreError::Internal)?;
+        // O courier anterior para ao sair de escopo; o transporte anterior fecha depois dele.
+        *lock(&self.courier) = Some(courier);
+        *lock(&self.transport) = Some(transport);
         Ok(())
     }
 
-    /// Fecha a conexão com o servidor. Sem efeito se não houver.
+    /// Fecha a conexão com o servidor e para a outbox, que guarda o que não foi enviado. Sem
+    /// efeito se não houver conexão.
     pub fn disconnect(&self) {
+        *lock(&self.courier) = None;
         *lock(&self.transport) = None;
+    }
+
+    /// Põe `body` na outbox para `peer` e devolve o `client_message_id` (16 bytes, um UUID) que
+    /// a identifica. Funciona sem conexão: a mensagem fica no banco local, sobrevive a fechar o
+    /// app e sai quando houver [`Self::connect`].
+    ///
+    /// Conectado, o núcleo envia as mensagens na ordem em que entraram, cifrando cada tentativa
+    /// de novo, como [`Self::encrypt`] e [`Self::send`] fariam. Falha passageira (rede, limite de
+    /// taxa, banco ocupado, certificado de remetente vencido) para a fila e tenta de novo com
+    /// backoff exponencial, de 1s até 5min; reconectar ou entregar um certificado novo tenta na
+    /// hora. O resultado chega no stream de [`Self::events`]: [`ChatEvent::MessageSent`] quando o
+    /// servidor gravou na fila do destinatário, [`ChatEvent::MessageFailed`] quando reenviar não
+    /// adianta (sem sessão, identidade não confiável, destinatário inexistente, envelope
+    /// recusado). Sem assinante, o evento fica guardado e sai quando houver um.
+    pub fn send_message(&self, peer: DeviceAddress, body: Vec<u8>) -> Result<Vec<u8>, CoreError> {
+        let body = Zeroizing::new(body);
+        let peer = Address::try_from(&peer)?;
+        let client_message_id = self.outbox.push(&peer, &body)?;
+        if let Some(courier) = lock(&self.courier).as_ref() {
+            courier.wake().pushed();
+        }
+        Ok(client_message_id.to_vec())
     }
 
     /// Envia a `peer` um envelope de [`Self::encrypt`], identificado por `client_message_id`
@@ -267,20 +337,13 @@ impl FalaaiCore {
         if client_message_id.len() != CLIENT_MESSAGE_ID_LEN {
             return Err(CoreError::InvalidEnvelope);
         }
-        let destination_aci = Uuid::parse_str(peer.aci())
-            .map_err(|_| CoreError::InvalidAddress)?
-            .into_bytes();
-        let access_key = AccessKey::of(&self.store, &peer)?;
-        let outgoing = Outgoing {
-            destination_aci,
-            destination_device_id: peer.device_id(),
+        transmit(
+            &self.store,
+            &*self.transport()?,
+            &peer,
             client_message_id,
-            content: envelope.body,
-        };
-        let sent = self
-            .transport()?
-            .send(outgoing, access_key.as_ref().map(AccessKey::as_bytes))?;
-        CoreError::from_sent(sent)
+            envelope.body,
+        )
     }
 
     /// Pede ao `accounts` um certificado de remetente novo para este dispositivo (vale 24h) e
@@ -307,6 +370,15 @@ impl FalaaiCore {
 
     fn subscribe(&self, deliver: Deliver) {
         *lock(&self.events) = Some(deliver);
+        // Resultados da outbox que ficaram sem assinante.
+        self.wake_courier();
+    }
+
+    /// Faz a outbox tentar já, se há conexão.
+    fn wake_courier(&self) {
+        if let Some(courier) = lock(&self.courier).as_ref() {
+            courier.wake().retry();
+        }
     }
 
     fn with_sessions<T, E>(
@@ -324,6 +396,84 @@ impl FalaaiCore {
     }
 }
 
+/// Uma tentativa da outbox: cifra a mensagem e envia por `transport`, se ele ainda existe.
+fn attempt(
+    sessions: Arc<Mutex<Option<CoreSessions>>>,
+    store: SqliteStore,
+    transport: Weak<Transport>,
+) -> AttemptFn {
+    Box::new(move |pending| {
+        let Some(transport) = transport.upgrade() else {
+            return Attempt::Retry;
+        };
+        let sent = with_sessions(&sessions, |sessions| {
+            block_on(sessions.encrypt(&pending.to, &pending.body))
+        })
+        .and_then(|envelope| {
+            transmit(
+                &store,
+                &transport,
+                &pending.to,
+                pending.client_message_id.to_vec(),
+                envelope.body().to_vec(),
+            )
+        });
+        classify(sent)
+    })
+}
+
+/// Entrega um resultado da outbox no stream de eventos; `false` sem assinante.
+fn notify(events: Arc<Mutex<Option<Deliver>>>) -> NotifyFn {
+    Box::new(move |client_message_id, outcome| {
+        let client_message_id = client_message_id.to_vec();
+        let event = match outcome {
+            Outcome::Sent => ChatEvent::MessageSent { client_message_id },
+            Outcome::Rejected(rejection) => ChatEvent::MessageFailed {
+                client_message_id,
+                error: CoreError::from(rejection),
+            },
+        };
+        lock(&events).as_ref().is_some_and(|deliver| deliver(event))
+    })
+}
+
+/// Envia o envelope selado `content` a `peer`: pelo socket não autenticado se há a access key do
+/// contato, senão pelo autenticado.
+fn transmit(
+    store: &SqliteStore,
+    transport: &Transport,
+    peer: &Address,
+    client_message_id: Vec<u8>,
+    content: Vec<u8>,
+) -> Result<(), CoreError> {
+    let destination_aci = Uuid::parse_str(peer.aci())
+        .map_err(|_| CoreError::InvalidAddress)?
+        .into_bytes();
+    let access_key = AccessKey::of(store, peer)?;
+    let outgoing = Outgoing {
+        destination_aci,
+        destination_device_id: peer.device_id(),
+        client_message_id,
+        content,
+    };
+    let sent = transport.send(outgoing, access_key.as_ref().map(AccessKey::as_bytes))?;
+    CoreError::from_sent(sent)
+}
+
+/// Resultado de uma tentativa da outbox. Sai da fila o que foi aceito e o que reenviar igual não
+/// resolve; o resto (rede, limite de taxa, certificado vencido, banco ocupado) tenta de novo.
+fn classify(sent: Result<(), CoreError>) -> Attempt {
+    let rejection = match sent {
+        Ok(()) => return Attempt::Done(Outcome::Sent),
+        Err(CoreError::InvalidEnvelope | CoreError::InvalidAddress) => Rejection::InvalidEnvelope,
+        Err(CoreError::UnknownDestination) => Rejection::UnknownDestination,
+        Err(CoreError::SessionNotFound) => Rejection::SessionNotFound,
+        Err(CoreError::UntrustedIdentity) => Rejection::UntrustedIdentity,
+        Err(_) => return Attempt::Retry,
+    };
+    Attempt::Done(Outcome::Rejected(rejection))
+}
+
 fn with_sessions<T, E>(
     sessions: &Mutex<Option<CoreSessions>>,
     f: impl FnOnce(&mut CoreSessions) -> Result<T, E>,
@@ -336,36 +486,51 @@ where
     Ok(f(sessions)?)
 }
 
-/// Abre e decifra `envelope`, grava a mensagem em `inbox` e entrega o texto ao assinante de
+/// Abre e decifra o envelope, grava a mensagem em `inbox` e entrega o texto ao assinante de
 /// eventos, numa transação só: sem assinante, ou com o stream fechado na entrega, falha com
 /// [`CoreError::NoEventListener`], nada fica gravado e o ratchet não avança, então o mesmo
-/// envelope decifra de novo quando o servidor o reentregar.
+/// envelope decifra de novo quando o servidor o reentregar. Um reenvio de mensagem já gravada
+/// avança o ratchet sem gravar nem entregar e falha com [`CoreError::DuplicateMessage`].
 fn receive(
     sessions: &Mutex<Option<CoreSessions>>,
     inbox: &Inbox,
     events: &Mutex<Option<Deliver>>,
-    envelope: &protocol::Ciphertext,
-    server_timestamp: u64,
+    incoming: Incoming<'_>,
 ) -> Result<(), CoreError> {
+    let envelope = protocol::Ciphertext::new(incoming.content.to_vec());
+    let timestamp = incoming.server_timestamp;
     // O assinante fica travado durante a decifragem: não troca entre a checagem e a entrega.
     let events = lock(events);
     let deliver = events.as_ref().ok_or(CoreError::NoEventListener)?;
-    with_sessions(sessions, |sessions| {
-        block_on(sessions.decrypt(envelope, server_timestamp, |decrypted| {
+    let fresh = with_sessions(sessions, |sessions| {
+        block_on(sessions.decrypt(&envelope, timestamp, |decrypted| {
             // Roda na thread dona da transação do decrypt: grava junto com o ratchet.
-            let id = inbox.record(&decrypted.from, server_timestamp, &decrypted.plaintext)?;
+            let Some(id) = inbox.record(
+                &decrypted.from,
+                incoming.client_message_id,
+                timestamp,
+                &decrypted.plaintext,
+            )?
+            else {
+                return Ok(false);
+            };
             let event = ChatEvent::MessageReceived {
                 id,
                 from: DeviceAddress::from(&decrypted.from),
                 body: decrypted.plaintext.to_vec(),
             };
             if deliver(event) {
-                Ok(())
+                Ok(true)
             } else {
                 Err(CoreError::NoEventListener)
             }
         }))
-    })
+    })?;
+    if fresh {
+        Ok(())
+    } else {
+        Err(CoreError::DuplicateMessage)
+    }
 }
 
 /// Confirmar ou não ao servidor um envelope recebido pelo socket. Confirma o que foi entregue e
@@ -535,7 +700,7 @@ mod tests {
         }
 
         fn deliver(&self, envelope: Envelope) -> Result<(), Box<dyn Error>> {
-            Ok(self.core.decrypt(envelope, now_millis()?)?)
+            Ok(self.core.decrypt(envelope, Vec::new(), now_millis()?)?)
         }
 
         /// Decifra, confere o remetente e que a mensagem do evento ficou gravada, e devolve o
@@ -554,6 +719,7 @@ mod tests {
                     assert_eq!((stored.id, &stored.body), (id, &body));
                     Ok(body)
                 }
+                other => Err(format!("esperava mensagem, veio {other:?}").into()),
             }
         }
 
@@ -682,7 +848,7 @@ mod tests {
 
         let unsubscribed = server.open(0xB0)?;
         assert_eq!(
-            unsubscribed.decrypt(first.clone(), now_millis()?),
+            unsubscribed.decrypt(first.clone(), Vec::new(), now_millis()?),
             Err(CoreError::NoEventListener)
         );
         assert!(bob.stored()?.is_empty());
@@ -697,7 +863,7 @@ mod tests {
         bob.events = mpsc::channel().1;
         let first = alice.send(&bob, b"oi, bob")?;
         assert_eq!(
-            bob.core.decrypt(first.clone(), now_millis()?),
+            bob.core.decrypt(first.clone(), Vec::new(), now_millis()?),
             Err(CoreError::NoEventListener)
         );
         assert!(bob.stored()?.is_empty(), "gravada sem entrega");
@@ -718,7 +884,7 @@ mod tests {
 
         // A extensão decifra com o app em segundo plano: o evento fica nela.
         let sent_at = now_millis()?;
-        extension.core.decrypt(first, sent_at)?;
+        extension.core.decrypt(first, Vec::new(), sent_at)?;
         assert!(app.events.try_recv().is_err());
 
         assert!(app.core.changed_by_other_process()?);
@@ -749,12 +915,12 @@ mod tests {
             *last ^= 0x01;
         }
         assert_eq!(
-            bob.core.decrypt(tampered, now_millis()?),
+            bob.core.decrypt(tampered, Vec::new(), now_millis()?),
             Err(CoreError::InvalidMessage)
         );
         bob.receive(&alice, first.clone())?;
         assert_eq!(
-            bob.core.decrypt(first, now_millis()?),
+            bob.core.decrypt(first, Vec::new(), now_millis()?),
             Err(CoreError::DuplicateMessage)
         );
         assert_eq!(bob.stored()?, [b"oi, bob"]);
@@ -775,12 +941,136 @@ mod tests {
         assert!(app.core.changed_by_other_process()?);
         assert_eq!(app.receive(&alice, second)?, b"tudo bem?");
         assert_eq!(
-            app.core.decrypt(first, now_millis()?),
+            app.core.decrypt(first, Vec::new(), now_millis()?),
             Err(CoreError::DuplicateMessage)
         );
         assert!(!app.core.changed_by_other_process()?);
         assert!(extension.core.changed_by_other_process()?);
         Ok(())
+    }
+
+    #[test]
+    fn reenvio_com_o_mesmo_client_message_id_avanca_o_ratchet_sem_duplicar() -> TestResult {
+        let server = Server::new()?;
+        let (alice, bob) = alice_and_bob(&server)?;
+        let id = vec![0x11; 16];
+        // A primeira tentativa chegou, mas o SendAck se perdeu: a outbox cifra de novo.
+        let first = alice.send(&bob, b"oi, bob")?;
+        let resent = alice.send(&bob, b"oi, bob")?;
+        assert_ne!(first, resent);
+
+        bob.core.decrypt(first, id.clone(), now_millis()?)?;
+        assert!(matches!(
+            bob.events.try_recv()?,
+            ChatEvent::MessageReceived { .. }
+        ));
+        assert_eq!(
+            bob.core.decrypt(resent.clone(), id.clone(), now_millis()?),
+            Err(CoreError::DuplicateMessage)
+        );
+        assert!(bob.events.try_recv().is_err());
+        assert_eq!(bob.stored()?, [b"oi, bob"]);
+        // O ratchet avançou com o reenvio: ele não abre de novo, e a conversa segue.
+        assert_eq!(
+            bob.core.decrypt(resent, Vec::new(), now_millis()?),
+            Err(CoreError::DuplicateMessage)
+        );
+        assert_eq!(
+            bob.receive(&alice, alice.send(&bob, b"tudo bem?")?)?,
+            b"tudo bem?"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn mesmo_client_message_id_de_outro_remetente_nao_e_reenvio() -> TestResult {
+        let server = Server::new()?;
+        let (alice, bob) = alice_and_bob(&server)?;
+        let carol = Device::register(&server, 0xC0)?;
+        // As pré-chaves descartáveis do bundle já foram para Alice: só sobra a de último recurso.
+        let bundle = PreKeyBundle {
+            pre_key: None,
+            kyber_pre_key: bob.keys.kyber_last_resort_pre_key.clone(),
+            ..bob.bundle()?
+        };
+        carol
+            .core
+            .process_prekey_bundle(bob.address.clone(), bundle)?;
+        let id = vec![0x11; 16];
+        bob.core
+            .decrypt(alice.send(&bob, b"de alice")?, id.clone(), now_millis()?)?;
+        bob.core
+            .decrypt(carol.send(&bob, b"de carol")?, id, now_millis()?)?;
+        assert_eq!(bob.stored()?, [&b"de alice"[..], b"de carol"]);
+        Ok(())
+    }
+
+    #[test]
+    fn mensagem_vai_para_a_outbox_sem_conexao_e_sobrevive_a_reabrir() -> TestResult {
+        let server = Server::new()?;
+        let (mut alice, bob) = alice_and_bob(&server)?;
+        let first = alice
+            .core
+            .send_message(bob.address.clone(), b"um".to_vec())?;
+        let second = alice
+            .core
+            .send_message(bob.address.clone(), b"dois".to_vec())?;
+        assert_eq!(first.len(), CLIENT_MESSAGE_ID_LEN);
+        assert_ne!(first, second);
+
+        alice.core = server.open(0xA1)?;
+        let pending = alice.core.outbox.next()?.ok_or("outbox vazia")?;
+        assert_eq!(pending.client_message_id.to_vec(), first);
+        assert_eq!(pending.to, Address::try_from(&bob.address)?);
+        assert_eq!(pending.body.as_slice(), b"um");
+        assert!(alice.events.try_recv().is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn mensagem_para_endereco_invalido_nao_entra_na_outbox() -> TestResult {
+        let server = Server::new()?;
+        let alice = Device::register(&server, 0xA1)?;
+        let peer = DeviceAddress {
+            aci: "nao-e-uuid".to_owned(),
+            device_id: 1,
+        };
+        assert_eq!(
+            alice.core.send_message(peer, b"oi".to_vec()),
+            Err(CoreError::InvalidAddress)
+        );
+        assert!(alice.core.outbox.next()?.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn so_recusa_definitiva_tira_a_mensagem_da_outbox() {
+        let done = |sent| match classify(sent) {
+            Attempt::Done(outcome) => Some(outcome),
+            Attempt::Retry => None,
+        };
+        assert_eq!(done(Ok(())), Some(Outcome::Sent));
+        for (error, rejection) in [
+            (CoreError::InvalidEnvelope, Rejection::InvalidEnvelope),
+            (CoreError::UnknownDestination, Rejection::UnknownDestination),
+            (CoreError::SessionNotFound, Rejection::SessionNotFound),
+            (CoreError::UntrustedIdentity, Rejection::UntrustedIdentity),
+        ] {
+            assert_eq!(done(Err(error)), Some(Outcome::Rejected(rejection)));
+            assert_eq!(CoreError::from(rejection), error);
+        }
+        for passing in [
+            CoreError::Network,
+            CoreError::NotConnected,
+            CoreError::RateLimited,
+            CoreError::Unauthorized,
+            CoreError::NoSenderCertificate,
+            CoreError::DatabaseBusy,
+            CoreError::Storage,
+            CoreError::Internal,
+        ] {
+            assert_eq!(done(Err(passing)), None, "{passing:?}");
+        }
     }
 
     #[test]
@@ -791,7 +1081,7 @@ mod tests {
         let reply = bob.send(&alice, b"oi")?;
         alice.receive(&bob, reply.clone())?;
         assert_eq!(
-            alice.core.decrypt(reply, now_millis()?),
+            alice.core.decrypt(reply, Vec::new(), now_millis()?),
             Err(CoreError::DuplicateMessage)
         );
         Ok(())
@@ -983,6 +1273,16 @@ mod tests {
             server_timestamp: 1,
             body: b"segredo".to_vec(),
         };
+        let sent = ChatEvent::MessageSent {
+            client_message_id: vec![0xEE; 16],
+        };
+        let failed = ChatEvent::MessageFailed {
+            client_message_id: vec![0xEE; 16],
+            error: CoreError::SessionNotFound,
+        };
+        for debug in [&sent, &failed].map(|event| format!("{event:?}")) {
+            assert!(!debug.contains("238"), "{debug}");
+        }
         for debug in [
             format!("{event:?}"),
             format!("{envelope:?}"),

@@ -97,7 +97,9 @@ fn stream_fechado_na_extensao_nao_grava_e_o_app_decifra_a_reentrega() -> TestRes
     let envelope = alice.send(&app, b"tudo bem?")?;
     extension.close_events();
     assert_eq!(
-        extension.core().decrypt(envelope.clone(), now_millis()?),
+        extension
+            .core()
+            .decrypt(envelope.clone(), Vec::new(), now_millis()?),
         Err(CoreError::NoEventListener)
     );
     assert_eq!(all(&app)?, before);

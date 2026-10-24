@@ -72,7 +72,7 @@ class FalaaiCoreLib
   String get codegenVersion => '2.13.0';
 
   @override
-  int get rustContentHash => -294658907;
+  int get rustContentHash => 94120224;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -97,6 +97,7 @@ abstract class FalaaiCoreLibApi extends BaseApi {
   Future<void> crateApiFalaaiCoreDecrypt({
     required FalaaiCore that,
     required Envelope envelope,
+    required List<int> clientMessageId,
     required BigInt serverTimestamp,
   });
 
@@ -141,6 +142,12 @@ abstract class FalaaiCoreLibApi extends BaseApi {
     required DeviceAddress peer,
     required List<int> clientMessageId,
     required Envelope envelope,
+  });
+
+  Future<Uint8List> crateApiFalaaiCoreSendMessage({
+    required FalaaiCore that,
+    required DeviceAddress peer,
+    required List<int> body,
   });
 
   Future<void> crateApiFalaaiCoreSetLocalAddress({
@@ -252,6 +259,7 @@ class FalaaiCoreLibApiImpl extends FalaaiCoreLibApiImplPlatform
   Future<void> crateApiFalaaiCoreDecrypt({
     required FalaaiCore that,
     required Envelope envelope,
+    required List<int> clientMessageId,
     required BigInt serverTimestamp,
   }) {
     return handler.executeNormal(
@@ -263,6 +271,7 @@ class FalaaiCoreLibApiImpl extends FalaaiCoreLibApiImplPlatform
             serializer,
           );
           sse_encode_box_autoadd_envelope(envelope, serializer);
+          sse_encode_list_prim_u_8_loose(clientMessageId, serializer);
           sse_encode_u_64(serverTimestamp, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
@@ -276,7 +285,7 @@ class FalaaiCoreLibApiImpl extends FalaaiCoreLibApiImplPlatform
           decodeErrorData: sse_decode_core_error,
         ),
         constMeta: kCrateApiFalaaiCoreDecryptConstMeta,
-        argValues: [that, envelope, serverTimestamp],
+        argValues: [that, envelope, clientMessageId, serverTimestamp],
         apiImpl: this,
       ),
     );
@@ -284,7 +293,7 @@ class FalaaiCoreLibApiImpl extends FalaaiCoreLibApiImplPlatform
 
   TaskConstMeta get kCrateApiFalaaiCoreDecryptConstMeta => const TaskConstMeta(
     debugName: "FalaaiCore_decrypt",
-    argNames: ["that", "envelope", "serverTimestamp"],
+    argNames: ["that", "envelope", "clientMessageId", "serverTimestamp"],
   );
 
   @override
@@ -629,6 +638,46 @@ class FalaaiCoreLibApiImpl extends FalaaiCoreLibApiImplPlatform
   );
 
   @override
+  Future<Uint8List> crateApiFalaaiCoreSendMessage({
+    required FalaaiCore that,
+    required DeviceAddress peer,
+    required List<int> body,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFalaaiCore(
+            that,
+            serializer,
+          );
+          sse_encode_box_autoadd_device_address(peer, serializer);
+          sse_encode_list_prim_u_8_loose(body, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 13,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_list_prim_u_8_strict,
+          decodeErrorData: sse_decode_core_error,
+        ),
+        constMeta: kCrateApiFalaaiCoreSendMessageConstMeta,
+        argValues: [that, peer, body],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiFalaaiCoreSendMessageConstMeta =>
+      const TaskConstMeta(
+        debugName: "FalaaiCore_send_message",
+        argNames: ["that", "peer", "body"],
+      );
+
+  @override
   Future<void> crateApiFalaaiCoreSetLocalAddress({
     required FalaaiCore that,
     required DeviceAddress address,
@@ -645,7 +694,7 @@ class FalaaiCoreLibApiImpl extends FalaaiCoreLibApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 13,
+            funcId: 14,
             port: port_,
           );
         },
@@ -683,7 +732,7 @@ class FalaaiCoreLibApiImpl extends FalaaiCoreLibApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 14,
+            funcId: 15,
             port: port_,
           );
         },
@@ -713,7 +762,7 @@ class FalaaiCoreLibApiImpl extends FalaaiCoreLibApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 15,
+            funcId: 16,
             port: port_,
           );
         },
@@ -845,6 +894,15 @@ class FalaaiCoreLibApiImpl extends FalaaiCoreLibApiImplPlatform
           id: dco_decode_i_64(raw[1]),
           from: dco_decode_box_autoadd_device_address(raw[2]),
           body: dco_decode_list_prim_u_8_strict(raw[3]),
+        );
+      case 1:
+        return ChatEvent_MessageSent(
+          clientMessageId: dco_decode_list_prim_u_8_strict(raw[1]),
+        );
+      case 2:
+        return ChatEvent_MessageFailed(
+          clientMessageId: dco_decode_list_prim_u_8_strict(raw[1]),
+          error: dco_decode_core_error(raw[2]),
         );
       default:
         throw Exception("unreachable");
@@ -1162,6 +1220,16 @@ class FalaaiCoreLibApiImpl extends FalaaiCoreLibApiImplPlatform
           id: var_id,
           from: var_from,
           body: var_body,
+        );
+      case 1:
+        var var_clientMessageId = sse_decode_list_prim_u_8_strict(deserializer);
+        return ChatEvent_MessageSent(clientMessageId: var_clientMessageId);
+      case 2:
+        var var_clientMessageId = sse_decode_list_prim_u_8_strict(deserializer);
+        var var_error = sse_decode_core_error(deserializer);
+        return ChatEvent_MessageFailed(
+          clientMessageId: var_clientMessageId,
+          error: var_error,
         );
       default:
         throw UnimplementedError('');
@@ -1521,6 +1589,16 @@ class FalaaiCoreLibApiImpl extends FalaaiCoreLibApiImplPlatform
         sse_encode_i_64(id, serializer);
         sse_encode_box_autoadd_device_address(from, serializer);
         sse_encode_list_prim_u_8_strict(body, serializer);
+      case ChatEvent_MessageSent(clientMessageId: final clientMessageId):
+        sse_encode_i_32(1, serializer);
+        sse_encode_list_prim_u_8_strict(clientMessageId, serializer);
+      case ChatEvent_MessageFailed(
+        clientMessageId: final clientMessageId,
+        error: final error,
+      ):
+        sse_encode_i_32(2, serializer);
+        sse_encode_list_prim_u_8_strict(clientMessageId, serializer);
+        sse_encode_core_error(error, serializer);
     }
   }
 
@@ -1748,6 +1826,9 @@ class FalaaiCoreImpl extends RustOpaque implements FalaaiCore {
   /// (adulterado, duplicado, de identidade não confiável) também é confirmado e descartado; um
   /// que falhou por causa local (sem assinante, banco ocupado) fica na fila e volta na próxima
   /// conexão. Conectar de novo troca a conexão anterior.
+  ///
+  /// Conectado, o núcleo também esvazia a outbox ([`Self::send_message`]) em segundo plano, e
+  /// volta a esvaziá-la a cada reconexão.
   Future<void> connect({required ServerConfig server, required String token}) =>
       FalaaiCoreLib.instance.api.crateApiFalaaiCoreConnect(
         that: this,
@@ -1757,10 +1838,14 @@ class FalaaiCoreImpl extends RustOpaque implements FalaaiCore {
 
   /// Abre e decifra um envelope selado, grava a mensagem no banco local e entrega o texto, com o
   /// remetente tirado do certificado, no stream de [`Self::events`] como
-  /// [`ChatEvent::MessageReceived`]. `server_timestamp` é o do `Deliver` (milissegundos desde a
-  /// época Unix): o certificado de remetente tem de valer nesse instante, então uma mensagem que
-  /// esperou na fila ainda abre. `Ok` quer dizer que a mensagem foi gravada e o evento entregue,
-  /// e o envelope pode ser confirmado ao servidor.
+  /// [`ChatEvent::MessageReceived`]. `client_message_id` e `server_timestamp` vêm do `Deliver`
+  /// (milissegundos desde a época Unix): o certificado de remetente tem de valer nesse instante,
+  /// então uma mensagem que esperou na fila ainda abre. `Ok` quer dizer que a mensagem foi
+  /// gravada e o evento entregue, e o envelope pode ser confirmado ao servidor.
+  ///
+  /// Um reenvio de mensagem já gravada (mesmo remetente e mesmo `client_message_id`, que não
+  /// pode ser vazio para isso) avança o ratchet, mas não grava nem emite evento: falha com
+  /// [`CoreError::DuplicateMessage`], como o mesmo envelope decifrado duas vezes.
   ///
   /// Decifrar, gravar e entregar são atômicos: sem assinante, ou com o stream fechado na
   /// entrega, falha com [`CoreError::NoEventListener`], nada é gravado e o ratchet não avança,
@@ -1769,14 +1854,17 @@ class FalaaiCoreImpl extends RustOpaque implements FalaaiCore {
   /// e o envelope fica para depois.
   Future<void> decrypt({
     required Envelope envelope,
+    required List<int> clientMessageId,
     required BigInt serverTimestamp,
   }) => FalaaiCoreLib.instance.api.crateApiFalaaiCoreDecrypt(
     that: this,
     envelope: envelope,
+    clientMessageId: clientMessageId,
     serverTimestamp: serverTimestamp,
   );
 
-  /// Fecha a conexão com o servidor. Sem efeito se não houver.
+  /// Fecha a conexão com o servidor e para a outbox, que guarda o que não foi enviado. Sem
+  /// efeito se não houver conexão.
   Future<void> disconnect() =>
       FalaaiCoreLib.instance.api.crateApiFalaaiCoreDisconnect(that: this);
 
@@ -1851,6 +1939,27 @@ class FalaaiCoreImpl extends RustOpaque implements FalaaiCore {
     envelope: envelope,
   );
 
+  /// Põe `body` na outbox para `peer` e devolve o `client_message_id` (16 bytes, um UUID) que
+  /// a identifica. Funciona sem conexão: a mensagem fica no banco local, sobrevive a fechar o
+  /// app e sai quando houver [`Self::connect`].
+  ///
+  /// Conectado, o núcleo envia as mensagens na ordem em que entraram, cifrando cada tentativa
+  /// de novo, como [`Self::encrypt`] e [`Self::send`] fariam. Falha passageira (rede, limite de
+  /// taxa, banco ocupado, certificado de remetente vencido) para a fila e tenta de novo com
+  /// backoff exponencial, de 1s até 5min; reconectar ou entregar um certificado novo tenta na
+  /// hora. O resultado chega no stream de [`Self::events`]: [`ChatEvent::MessageSent`] quando o
+  /// servidor gravou na fila do destinatário, [`ChatEvent::MessageFailed`] quando reenviar não
+  /// adianta (sem sessão, identidade não confiável, destinatário inexistente, envelope
+  /// recusado). Sem assinante, o evento fica guardado e sai quando houver um.
+  Future<Uint8List> sendMessage({
+    required DeviceAddress peer,
+    required List<int> body,
+  }) => FalaaiCoreLib.instance.api.crateApiFalaaiCoreSendMessage(
+    that: this,
+    peer: peer,
+    body: body,
+  );
+
   /// Grava o endereço que o servidor atribuiu a este dispositivo no registro e libera as
   /// sessões. Exige [`Self::generate_account_keys`] antes; repetir o mesmo endereço não muda
   /// nada.
@@ -1862,9 +1971,10 @@ class FalaaiCoreImpl extends RustOpaque implements FalaaiCore {
 
   /// Entrega o certificado de remetente que o `accounts` emitiu para este dispositivo. Ele vale
   /// pouco tempo (24h) e fica só em memória: o app o guarda, entrega de novo ao abrir o núcleo e
-  /// pede outro quando [`Self::encrypt`] falhar com [`CoreError::NoSenderCertificate`]. Falha
-  /// com [`CoreError::InvalidSenderCertificate`] se o certificado não encadeia até o trust
-  /// root, já venceu ou é de outro dispositivo ou identidade.
+  /// pede outro quando [`Self::encrypt`] falhar com [`CoreError::NoSenderCertificate`]. Sem
+  /// certificado válido a outbox fica parada; o novo a destrava na hora. Falha com
+  /// [`CoreError::InvalidSenderCertificate`] se o certificado não encadeia até o trust root, já
+  /// venceu ou é de outro dispositivo ou identidade.
   Future<void> setSenderCertificate({required List<int> certificate}) =>
       FalaaiCoreLib.instance.api.crateApiFalaaiCoreSetSenderCertificate(
         that: this,

@@ -4,7 +4,8 @@
 //! `storage` guarda o banco local cifrado (SQLCipher), sem conhecer a libsignal. `transport`
 //! fala com o servidor (WebSocket e HTTPS), também sem conhecê-la. `api` é a superfície exposta
 //! ao Flutter, e `frb_generated` a cola FFI gerada a partir dela. `messaging` guarda as mensagens
-//! no banco local, dentro da mesma transação que avança o ratchet.
+//! no banco local: as recebidas, dentro da mesma transação que avança o ratchet, e as que esperam
+//! envio, na outbox.
 
 pub mod api;
 // Gerado por 'make bindings'. Exportar funções C exige `#[unsafe(no_mangle)]`, por isso o

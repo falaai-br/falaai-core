@@ -61,6 +61,16 @@ pub(crate) enum TransportError {
     Protocol,
 }
 
+/// Envelope recebido pelo socket autenticado.
+pub(crate) struct Incoming<'a> {
+    /// Mensagem selada.
+    pub(crate) content: &'a [u8],
+    /// Id que o remetente deu à mensagem, o mesmo em todo reenvio dela.
+    pub(crate) client_message_id: &'a [u8],
+    /// Instante em que o servidor recebeu o envelope, em milissegundos desde a época Unix.
+    pub(crate) server_timestamp: u64,
+}
+
 /// O que fazer com um envelope recebido depois de entregue ao núcleo.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Disposition {
@@ -180,12 +190,13 @@ pub(crate) struct Transport {
 }
 
 impl Transport {
-    /// Conecta o socket autenticado em segundo plano e passa a `deliver` o `content` e o
-    /// `server_timestamp` de cada envelope recebido.
+    /// Conecta o socket autenticado em segundo plano, chama `connected` a cada vez que ele
+    /// (re)conecta e passa a `deliver` cada envelope recebido.
     pub(crate) fn connect(
         server: &Server,
         credentials: Credentials,
-        deliver: impl FnMut(&[u8], u64) -> Disposition + Send + 'static,
+        deliver: impl FnMut(Incoming<'_>) -> Disposition + Send + 'static,
+        connected: impl FnMut() + Send + 'static,
     ) -> Result<Self, TransportError> {
         let tls = server.roots.rustls()?;
         let credentials = Arc::new(credentials);
@@ -194,6 +205,7 @@ impl Transport {
             tls.clone(),
             credentials.clone(),
             Box::new(deliver),
+            Box::new(connected),
         )?;
         Ok(Self {
             credentials,

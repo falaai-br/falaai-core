@@ -1,5 +1,6 @@
 //! Erros que o Dart recebe como exceção tipada.
 
+use crate::messaging::outbox::Rejection;
 use crate::protocol::ProtocolError;
 use crate::storage::StorageError;
 use crate::transport::{Sent, TransportError};
@@ -131,6 +132,17 @@ impl From<TransportError> for CoreError {
             TransportError::NotConnected => Self::NotConnected,
             TransportError::Unauthorized => Self::Unauthorized,
             TransportError::Protocol => Self::InvalidServerResponse,
+        }
+    }
+}
+
+impl From<Rejection> for CoreError {
+    fn from(rejection: Rejection) -> Self {
+        match rejection {
+            Rejection::InvalidEnvelope => Self::InvalidEnvelope,
+            Rejection::UnknownDestination => Self::UnknownDestination,
+            Rejection::SessionNotFound => Self::SessionNotFound,
+            Rejection::UntrustedIdentity => Self::UntrustedIdentity,
         }
     }
 }

@@ -358,6 +358,7 @@ impl<'a> Client<'a> {
                 assert!(sender == from.address, "remetente errado no evento");
                 assert_eq!(body, text);
             }
+            other => return Err(format!("esperava mensagem, veio {other:?}").into()),
         }
         Ok(())
     }

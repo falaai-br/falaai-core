@@ -40,7 +40,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.13.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -294658907;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 94120224;
 
 // Section: executor
 
@@ -176,6 +176,7 @@ fn wire__crate__api__FalaaiCore_decrypt_impl(
                 flutter_rust_bridge::for_generated::RustAutoOpaqueInner<FalaaiCore>,
             >>::sse_decode(&mut deserializer);
             let api_envelope = <crate::api::types::Envelope>::sse_decode(&mut deserializer);
+            let api_client_message_id = <Vec<u8>>::sse_decode(&mut deserializer);
             let api_server_timestamp = <u64>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| {
@@ -197,6 +198,7 @@ fn wire__crate__api__FalaaiCore_decrypt_impl(
                     let output_ok = crate::api::FalaaiCore::decrypt(
                         &*api_that_guard,
                         api_envelope,
+                        api_client_message_id,
                         api_server_timestamp,
                     )?;
                     std::result::Result::Ok(output_ok)
@@ -666,6 +668,58 @@ fn wire__crate__api__FalaaiCore_send_impl(
         },
     )
 }
+fn wire__crate__api__FalaaiCore_send_message_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "FalaaiCore_send_message",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_that = <RustOpaqueMoi<
+                flutter_rust_bridge::for_generated::RustAutoOpaqueInner<FalaaiCore>,
+            >>::sse_decode(&mut deserializer);
+            let api_peer = <crate::api::types::DeviceAddress>::sse_decode(&mut deserializer);
+            let api_body = <Vec<u8>>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, crate::api::error::CoreError>((move || {
+                    let mut api_that_guard = None;
+                    let decode_indices_ =
+                        flutter_rust_bridge::for_generated::lockable_compute_decode_order(vec![
+                            flutter_rust_bridge::for_generated::LockableOrderInfo::new(
+                                &api_that, 0, false,
+                            ),
+                        ]);
+                    for i in decode_indices_ {
+                        match i {
+                            0 => api_that_guard = Some(api_that.lockable_decode_sync_ref()),
+                            _ => unreachable!(),
+                        }
+                    }
+                    let api_that_guard = api_that_guard.unwrap();
+                    let output_ok =
+                        crate::api::FalaaiCore::send_message(&*api_that_guard, api_peer, api_body)?;
+                    std::result::Result::Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
 fn wire__crate__api__FalaaiCore_set_local_address_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
@@ -898,6 +952,20 @@ impl SseDecode for crate::api::types::ChatEvent {
                     id: var_id,
                     from: var_from,
                     body: var_body,
+                };
+            }
+            1 => {
+                let mut var_clientMessageId = <Vec<u8>>::sse_decode(deserializer);
+                return crate::api::types::ChatEvent::MessageSent {
+                    client_message_id: var_clientMessageId,
+                };
+            }
+            2 => {
+                let mut var_clientMessageId = <Vec<u8>>::sse_decode(deserializer);
+                let mut var_error = <crate::api::error::CoreError>::sse_decode(deserializer);
+                return crate::api::types::ChatEvent::MessageFailed {
+                    client_message_id: var_clientMessageId,
+                    error: var_error,
                 };
             }
             _ => {
@@ -1199,16 +1267,17 @@ fn pde_ffi_dispatcher_primary_impl(
             wire__crate__api__FalaaiCore_received_messages_impl(port, ptr, rust_vec_len, data_len)
         }
         12 => wire__crate__api__FalaaiCore_send_impl(port, ptr, rust_vec_len, data_len),
-        13 => {
+        13 => wire__crate__api__FalaaiCore_send_message_impl(port, ptr, rust_vec_len, data_len),
+        14 => {
             wire__crate__api__FalaaiCore_set_local_address_impl(port, ptr, rust_vec_len, data_len)
         }
-        14 => wire__crate__api__FalaaiCore_set_sender_certificate_impl(
+        15 => wire__crate__api__FalaaiCore_set_sender_certificate_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        15 => wire__crate__api__generate_db_key_impl(port, ptr, rust_vec_len, data_len),
+        16 => wire__crate__api__generate_db_key_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -1276,6 +1345,20 @@ impl flutter_rust_bridge::IntoDart for crate::api::types::ChatEvent {
                 id.into_into_dart().into_dart(),
                 from.into_into_dart().into_dart(),
                 body.into_into_dart().into_dart(),
+            ]
+            .into_dart(),
+            crate::api::types::ChatEvent::MessageSent { client_message_id } => [
+                1.into_dart(),
+                client_message_id.into_into_dart().into_dart(),
+            ]
+            .into_dart(),
+            crate::api::types::ChatEvent::MessageFailed {
+                client_message_id,
+                error,
+            } => [
+                2.into_dart(),
+                client_message_id.into_into_dart().into_dart(),
+                error.into_into_dart().into_dart(),
             ]
             .into_dart(),
             _ => {
@@ -1545,6 +1628,18 @@ impl SseEncode for crate::api::types::ChatEvent {
                 <i64>::sse_encode(id, serializer);
                 <crate::api::types::DeviceAddress>::sse_encode(from, serializer);
                 <Vec<u8>>::sse_encode(body, serializer);
+            }
+            crate::api::types::ChatEvent::MessageSent { client_message_id } => {
+                <i32>::sse_encode(1, serializer);
+                <Vec<u8>>::sse_encode(client_message_id, serializer);
+            }
+            crate::api::types::ChatEvent::MessageFailed {
+                client_message_id,
+                error,
+            } => {
+                <i32>::sse_encode(2, serializer);
+                <Vec<u8>>::sse_encode(client_message_id, serializer);
+                <crate::api::error::CoreError>::sse_encode(error, serializer);
             }
             _ => {
                 unimplemented!("");

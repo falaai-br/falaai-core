@@ -87,4 +87,26 @@ pub(super) const MIGRATIONS: &[&str] = &[
         body BLOB NOT NULL
     ) STRICT;
     ",
+    // 5: idempotência por `client_message_id` (falaai-proto `Envelope`) e outbox.
+    //
+    // Quem envia reenvia com o mesmo id quando não viu o `SendAck`; o índice único deixa o
+    // receptor reconhecer a cópia. Mensagens anteriores ficam sem id (NULL não colide).
+    //
+    // `outbox`: mensagens a enviar, na ordem de `id`. `outcome` é NULL enquanto pendente; com
+    // resultado (0 aceita, maior que 0 recusada de vez) o corpo é apagado e a linha espera só
+    // o evento chegar ao app.
+    "
+    ALTER TABLE received_messages ADD COLUMN client_message_id BLOB;
+    CREATE UNIQUE INDEX received_messages_client_message_id
+        ON received_messages (sender_aci, sender_device_id, client_message_id);
+
+    CREATE TABLE outbox (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        client_message_id BLOB NOT NULL UNIQUE CHECK (length(client_message_id) = 16),
+        recipient_aci TEXT NOT NULL,
+        recipient_device_id INTEGER NOT NULL,
+        body BLOB NOT NULL,
+        outcome INTEGER
+    ) STRICT;
+    ",
 ];
