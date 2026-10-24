@@ -72,7 +72,7 @@ class FalaaiCoreLib
   String get codegenVersion => '2.13.0';
 
   @override
-  int get rustContentHash => 555874239;
+  int get rustContentHash => 207898981;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -146,6 +146,8 @@ abstract class FalaaiCoreLibApi extends BaseApi {
     required FalaaiCore that,
     required List<int> certificate,
   });
+
+  Future<Uint8List> crateApiGenerateDbKey();
 
   RustArcIncrementStrongCountFnType
   get rust_arc_increment_strong_count_FalaaiCore;
@@ -655,6 +657,33 @@ class FalaaiCoreLibApiImpl extends FalaaiCoreLibApiImplPlatform
         debugName: "FalaaiCore_set_sender_certificate",
         argNames: ["that", "certificate"],
       );
+
+  @override
+  Future<Uint8List> crateApiGenerateDbKey() {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 14,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_list_prim_u_8_strict,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiGenerateDbKeyConstMeta,
+        argValues: [],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiGenerateDbKeyConstMeta =>
+      const TaskConstMeta(debugName: "generate_db_key", argNames: []);
 
   RustArcIncrementStrongCountFnType
   get rust_arc_increment_strong_count_FalaaiCore => wire

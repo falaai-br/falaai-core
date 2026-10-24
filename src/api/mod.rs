@@ -1,9 +1,10 @@
 //! Superfície exposta ao Flutter via flutter_rust_bridge.
 //!
 //! Material de chave não cruza esta fronteira: as chaves privadas nascem e ficam no banco local;
-//! saem só chaves públicas, envelopes selados e texto já decifrado. O único segredo que entra é
-//! a chave do banco, que a plataforma guarda (Keychain/Keystore); ela é zerada depois de abrir o
-//! banco e nunca volta ao Dart.
+//! saem só chaves públicas, envelopes selados e texto já decifrado. O único segredo que cruza é
+//! a chave do banco: nasce no Rust ([`generate_db_key`]) e sai uma única vez, na instalação, para
+//! a plataforma guardar (Keychain/Keystore); depois só entra, em [`FalaaiCore::open`], e é zerada
+//! assim que o banco abre. O Dart apenas repassa esses bytes, sem gerar nem derivar chave.
 //!
 //! Todo envelope sai selado (sealed sender): o servidor não vê o remetente. Para isso o app
 //! entrega o trust root do servidor ao abrir o núcleo e o certificado de remetente emitido pelo
@@ -46,6 +47,13 @@ use crate::transport::{Credentials, Disposition, Outgoing, Server, Transport};
 
 /// Tamanho do `client_message_id`: um UUID.
 const CLIENT_MESSAGE_ID_LEN: usize = 16;
+
+/// Gera a chave de 32 bytes do banco local com o CSPRNG do Rust, para a primeira abertura. Não
+/// precisa de núcleo aberto. O app guarda os bytes no Keychain/Keystore, sem cópia em outro lugar,
+/// e os entrega a cada [`FalaaiCore::open`]; perder a chave é perder o banco.
+pub fn generate_db_key() -> Vec<u8> {
+    DatabaseKey::generate().to_vec()
+}
 
 /// Núcleo aberto sobre o banco local de um dispositivo. No Dart é um handle opaco.
 #[frb(opaque)]
@@ -812,6 +820,37 @@ mod tests {
         );
         assert_eq!(
             FalaaiCore::open(path, vec![0x00; 32], trust_root).err(),
+            Some(CoreError::WrongDatabaseKey)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn chave_gerada_tem_32_bytes_e_muda_a_cada_chamada() {
+        let (first, second) = (generate_db_key(), generate_db_key());
+        assert_eq!(first.len(), 32);
+        assert_eq!(second.len(), 32);
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn chave_gerada_abre_e_reabre_o_banco() -> TestResult {
+        let server = Server::new()?;
+        let path = server.dir.path().join("a1.db");
+        let path = path.to_string_lossy().into_owned();
+        let trust_root = server.certificates.trust_root();
+        let key = generate_db_key();
+
+        FalaaiCore::open(path.clone(), key.clone(), trust_root.clone())?.generate_account_keys()?;
+
+        // A conta gravada na primeira abertura continua lá.
+        let reopened = FalaaiCore::open(path.clone(), key, trust_root.clone())?;
+        assert_eq!(
+            reopened.generate_account_keys().err(),
+            Some(CoreError::AccountExists)
+        );
+        assert_eq!(
+            FalaaiCore::open(path, generate_db_key(), trust_root).err(),
             Some(CoreError::WrongDatabaseKey)
         );
         Ok(())

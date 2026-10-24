@@ -1,7 +1,7 @@
 //! Banco local cifrado: SQLCipher via rusqlite.
 //!
-//! A chave de 256 bits vem da plataforma (Keychain no iOS, Keystore no Android) e é aplicada
-//! como chave bruta, sem derivação por senha. O banco abre em WAL com busy timeout porque o
+//! A chave de 256 bits nasce aqui ([`DatabaseKey::generate`]), é guardada pela plataforma
+//! (Keychain no iOS, Keystore no Android) e é aplicada como chave bruta, sem derivação por senha. O banco abre em WAL com busy timeout porque o
 //! app e a Notification Service Extension do iOS abrem o mesmo arquivo.
 //!
 //! Operações que avançam o ratchet rodam numa transação explícita ([`Database::begin`]) que
@@ -18,6 +18,7 @@ use std::sync::{Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread::{self, ThreadId};
 use std::time::{Duration, Instant};
 
+use rand::Rng;
 use rusqlite::{Connection, ErrorCode, TransactionBehavior};
 use zeroize::Zeroizing;
 
@@ -65,6 +66,13 @@ impl From<rusqlite::Error> for StorageError {
 pub(crate) struct DatabaseKey(Zeroizing<[u8; 32]>);
 
 impl DatabaseKey {
+    /// Gera uma chave nova com o CSPRNG do processo.
+    pub(crate) fn generate() -> Self {
+        let mut key = Zeroizing::new([0; 32]);
+        rand::rng().fill(&mut key[..]);
+        Self(key)
+    }
+
     /// Copia a chave entregue pela plataforma. Exige exatamente 32 bytes.
     pub(crate) fn from_bytes(bytes: &[u8]) -> Result<Self, StorageError> {
         let mut key = Zeroizing::new([0; 32]);
@@ -73,6 +81,12 @@ impl DatabaseKey {
         }
         key.copy_from_slice(bytes);
         Ok(Self(key))
+    }
+
+    /// Cópia dos bytes, para a plataforma guardar a chave que acabou de nascer. Quem recebe
+    /// passa a ser responsável por zerá-la.
+    pub(crate) fn to_vec(&self) -> Vec<u8> {
+        self.0.to_vec()
     }
 
     /// `PRAGMA key` com a chave bruta em hexadecimal (`x'…'`), que dispensa o PBKDF2 do
@@ -349,6 +363,13 @@ mod tests {
                 "{len}"
             );
         }
+    }
+
+    #[test]
+    fn chave_gerada_tem_32_bytes_e_muda_a_cada_chamada() {
+        let (first, second) = (DatabaseKey::generate(), DatabaseKey::generate());
+        assert_eq!(first.to_vec().len(), 32);
+        assert_ne!(first.to_vec(), second.to_vec());
     }
 
     #[test]

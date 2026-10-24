@@ -10,6 +10,12 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
 // These functions are ignored because they are not marked as `pub`: `block_on`, `disposition`, `lock`, `receive`, `subscribe`, `transport`, `with_sessions`, `with_sessions`
 
+/// Gera a chave de 32 bytes do banco local com o CSPRNG do Rust, para a primeira abertura. Não
+/// precisa de núcleo aberto. O app guarda os bytes no Keychain/Keystore, sem cópia em outro lugar,
+/// e os entrega a cada [`FalaaiCore::open`]; perder a chave é perder o banco.
+Future<Uint8List> generateDbKey() =>
+    FalaaiCoreLib.instance.api.crateApiGenerateDbKey();
+
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<FalaaiCore>>
 abstract class FalaaiCore implements RustOpaqueInterface {
   /// `true` se outro processo gravou no banco desde a última chamada ou, na primeira, desde a
