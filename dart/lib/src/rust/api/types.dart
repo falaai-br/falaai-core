@@ -9,7 +9,7 @@ import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
 part 'types.freezed.dart';
 
 // These functions are ignored because they are not marked as `pub`: `to_protocol`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `try_from`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `try_from`
 
 /// Parte pública das chaves da conta, para enviar ao servidor no registro.
 class AccountKeys {
@@ -66,8 +66,11 @@ class AccountKeys {
 sealed class ChatEvent with _$ChatEvent {
   const ChatEvent._();
 
-  /// Mensagem decifrada de um contato.
+  /// Mensagem decifrada de um contato, já gravada no banco local.
   const factory ChatEvent.messageReceived({
+    /// Id da mensagem no banco, o mesmo de [`ReceivedMessage::id`].
+    required PlatformInt64 id,
+
     /// Dispositivo que enviou, conforme o certificado de remetente.
     required DeviceAddress from,
 
@@ -185,6 +188,43 @@ class PreKeyBundle {
           preKey == other.preKey &&
           signedPreKey == other.signedPreKey &&
           kyberPreKey == other.kyberPreKey;
+}
+
+/// Mensagem recebida, lida do banco local com [`super::FalaaiCore::received_messages`].
+class ReceivedMessage {
+  /// Id da mensagem no banco. Cresce na ordem em que as mensagens foram gravadas, pelo app ou
+  /// pela extensão de notificação; serve de cursor.
+  final PlatformInt64 id;
+
+  /// Dispositivo que enviou, conforme o certificado de remetente.
+  final DeviceAddress from;
+
+  /// Instante em que o servidor recebeu o envelope, em milissegundos desde a época Unix.
+  final BigInt serverTimestamp;
+
+  /// Texto decifrado.
+  final Uint8List body;
+
+  const ReceivedMessage({
+    required this.id,
+    required this.from,
+    required this.serverTimestamp,
+    required this.body,
+  });
+
+  @override
+  int get hashCode =>
+      id.hashCode ^ from.hashCode ^ serverTimestamp.hashCode ^ body.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ReceivedMessage &&
+          runtimeType == other.runtimeType &&
+          id == other.id &&
+          from == other.from &&
+          serverTimestamp == other.serverTimestamp &&
+          body == other.body;
 }
 
 /// Onde fica o servidor, da configuração do app.

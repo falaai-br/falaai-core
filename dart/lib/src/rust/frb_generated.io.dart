@@ -89,6 +89,9 @@ abstract class FalaaiCoreLibApiImplPlatform
   int dco_decode_i_32(dynamic raw);
 
   @protected
+  PlatformInt64 dco_decode_i_64(dynamic raw);
+
+  @protected
   List<Uint8List> dco_decode_list_list_prim_u_8_strict(dynamic raw);
 
   @protected
@@ -101,6 +104,9 @@ abstract class FalaaiCoreLibApiImplPlatform
   Uint8List dco_decode_list_prim_u_8_strict(dynamic raw);
 
   @protected
+  List<ReceivedMessage> dco_decode_list_received_message(dynamic raw);
+
+  @protected
   List<SignedPreKey> dco_decode_list_signed_pre_key(dynamic raw);
 
   @protected
@@ -111,6 +117,9 @@ abstract class FalaaiCoreLibApiImplPlatform
 
   @protected
   PreKeyBundle dco_decode_pre_key_bundle(dynamic raw);
+
+  @protected
+  ReceivedMessage dco_decode_received_message(dynamic raw);
 
   @protected
   ServerConfig dco_decode_server_config(dynamic raw);
@@ -205,6 +214,9 @@ abstract class FalaaiCoreLibApiImplPlatform
   int sse_decode_i_32(SseDeserializer deserializer);
 
   @protected
+  PlatformInt64 sse_decode_i_64(SseDeserializer deserializer);
+
+  @protected
   List<Uint8List> sse_decode_list_list_prim_u_8_strict(
     SseDeserializer deserializer,
   );
@@ -219,6 +231,11 @@ abstract class FalaaiCoreLibApiImplPlatform
   Uint8List sse_decode_list_prim_u_8_strict(SseDeserializer deserializer);
 
   @protected
+  List<ReceivedMessage> sse_decode_list_received_message(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   List<SignedPreKey> sse_decode_list_signed_pre_key(
     SseDeserializer deserializer,
   );
@@ -231,6 +248,9 @@ abstract class FalaaiCoreLibApiImplPlatform
 
   @protected
   PreKeyBundle sse_decode_pre_key_bundle(SseDeserializer deserializer);
+
+  @protected
+  ReceivedMessage sse_decode_received_message(SseDeserializer deserializer);
 
   @protected
   ServerConfig sse_decode_server_config(SseDeserializer deserializer);
@@ -335,6 +355,9 @@ abstract class FalaaiCoreLibApiImplPlatform
   void sse_encode_i_32(int self, SseSerializer serializer);
 
   @protected
+  void sse_encode_i_64(PlatformInt64 self, SseSerializer serializer);
+
+  @protected
   void sse_encode_list_list_prim_u_8_strict(
     List<Uint8List> self,
     SseSerializer serializer,
@@ -349,6 +372,12 @@ abstract class FalaaiCoreLibApiImplPlatform
   @protected
   void sse_encode_list_prim_u_8_strict(
     Uint8List self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_received_message(
+    List<ReceivedMessage> self,
     SseSerializer serializer,
   );
 
@@ -369,6 +398,12 @@ abstract class FalaaiCoreLibApiImplPlatform
 
   @protected
   void sse_encode_pre_key_bundle(PreKeyBundle self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_received_message(
+    ReceivedMessage self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_server_config(ServerConfig self, SseSerializer serializer);

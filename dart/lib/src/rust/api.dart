@@ -21,30 +21,33 @@ abstract class FalaaiCore implements RustOpaqueInterface {
   /// `true` se outro processo gravou no banco desde a última chamada ou, na primeira, desde a
   /// abertura: a extensão de notificação do iOS decifrou mensagens ou abriu sessões (ou o app,
   /// visto da extensão). O app chama ao voltar ao primeiro plano e ao receber o aviso da
-  /// extensão, para recarregar o que mostra; o aviso entre processos é da plataforma.
+  /// extensão, para recarregar o que mostra (as mensagens com [`Self::received_messages`]); o
+  /// aviso entre processos é da plataforma.
   Future<bool> changedByOtherProcess();
 
   /// Conecta ao servidor com o token que o `accounts` emitiu no registro deste dispositivo.
   /// Exige o endereço local ([`Self::set_local_address`]).
   ///
   /// Volta logo: o socket autenticado conecta em segundo plano e reconecta sozinho quando cai.
-  /// Cada envelope que chega é decifrado e entregue no stream de [`Self::events`], como em
-  /// [`Self::decrypt`], e só então confirmado ao servidor. Um envelope que nunca vai abrir
+  /// Cada envelope que chega é decifrado, gravado e entregue no stream de [`Self::events`], como
+  /// em [`Self::decrypt`], e só então confirmado ao servidor. Um envelope que nunca vai abrir
   /// (adulterado, duplicado, de identidade não confiável) também é confirmado e descartado; um
   /// que falhou por causa local (sem assinante, banco ocupado) fica na fila e volta na próxima
   /// conexão. Conectar de novo troca a conexão anterior.
   Future<void> connect({required ServerConfig server, required String token});
 
-  /// Abre e decifra um envelope selado e entrega o texto, com o remetente tirado do certificado,
-  /// no stream de [`Self::events`] como [`ChatEvent::MessageReceived`]. `server_timestamp` é o
-  /// do `Deliver` (milissegundos desde a época Unix): o certificado de remetente tem de valer
-  /// nesse instante, então uma mensagem que esperou na fila ainda abre. `Ok` quer dizer que o
-  /// evento foi entregue e o envelope pode ser confirmado ao servidor.
+  /// Abre e decifra um envelope selado, grava a mensagem no banco local e entrega o texto, com o
+  /// remetente tirado do certificado, no stream de [`Self::events`] como
+  /// [`ChatEvent::MessageReceived`]. `server_timestamp` é o do `Deliver` (milissegundos desde a
+  /// época Unix): o certificado de remetente tem de valer nesse instante, então uma mensagem que
+  /// esperou na fila ainda abre. `Ok` quer dizer que a mensagem foi gravada e o evento entregue,
+  /// e o envelope pode ser confirmado ao servidor.
   ///
-  /// Decifrar e entregar são atômicos: sem assinante, ou com o stream fechado na entrega, falha
-  /// com [`CoreError::NoEventListener`] e o ratchet não avança, então o mesmo envelope decifra
-  /// de novo. Enquanto o app ou a extensão de notificação decifra, o outro processo espera;
-  /// passado o timeout, falha com [`CoreError::DatabaseBusy`] e o envelope fica para depois.
+  /// Decifrar, gravar e entregar são atômicos: sem assinante, ou com o stream fechado na
+  /// entrega, falha com [`CoreError::NoEventListener`], nada é gravado e o ratchet não avança,
+  /// então o mesmo envelope decifra de novo. Enquanto o app ou a extensão de notificação
+  /// decifra, o outro processo espera; passado o timeout, falha com [`CoreError::DatabaseBusy`]
+  /// e o envelope fica para depois.
   Future<void> decrypt({
     required Envelope envelope,
     required BigInt serverTimestamp,
@@ -91,6 +94,18 @@ abstract class FalaaiCore implements RustOpaqueInterface {
   Future<void> processPrekeyBundle({
     required DeviceAddress peer,
     required PreKeyBundle bundle,
+  });
+
+  /// Até `limit` mensagens recebidas com id maior que `after`, em ordem de id: as que este
+  /// processo entregou em [`ChatEvent::MessageReceived`] e as que o outro (a extensão de
+  /// notificação) decifrou e gravou. Comece com `after = 0` e passe o id da última lida.
+  ///
+  /// O id cresce na ordem em que as mensagens foram gravadas por qualquer dos processos, então
+  /// o id de um evento não serve de cursor: a extensão pode ter gravado ids menores ainda não
+  /// lidos. Mensagens já recebidas por evento voltam aqui; o app deduplica pelo id.
+  Future<List<ReceivedMessage>> receivedMessages({
+    required PlatformInt64 after,
+    required int limit,
   });
 
   /// Envia a `peer` um envelope de [`Self::encrypt`], identificado por `client_message_id`

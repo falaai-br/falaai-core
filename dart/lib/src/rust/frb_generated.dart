@@ -72,7 +72,7 @@ class FalaaiCoreLib
   String get codegenVersion => '2.13.0';
 
   @override
-  int get rustContentHash => 207898981;
+  int get rustContentHash => -294658907;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -128,6 +128,12 @@ abstract class FalaaiCoreLibApi extends BaseApi {
     required FalaaiCore that,
     required DeviceAddress peer,
     required PreKeyBundle bundle,
+  });
+
+  Future<List<ReceivedMessage>> crateApiFalaaiCoreReceivedMessages({
+    required FalaaiCore that,
+    required PlatformInt64 after,
+    required int limit,
   });
 
   Future<void> crateApiFalaaiCoreSend({
@@ -542,6 +548,46 @@ class FalaaiCoreLibApiImpl extends FalaaiCoreLibApiImplPlatform
       );
 
   @override
+  Future<List<ReceivedMessage>> crateApiFalaaiCoreReceivedMessages({
+    required FalaaiCore that,
+    required PlatformInt64 after,
+    required int limit,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFalaaiCore(
+            that,
+            serializer,
+          );
+          sse_encode_i_64(after, serializer);
+          sse_encode_u_32(limit, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 11,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_list_received_message,
+          decodeErrorData: sse_decode_core_error,
+        ),
+        constMeta: kCrateApiFalaaiCoreReceivedMessagesConstMeta,
+        argValues: [that, after, limit],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiFalaaiCoreReceivedMessagesConstMeta =>
+      const TaskConstMeta(
+        debugName: "FalaaiCore_received_messages",
+        argNames: ["that", "after", "limit"],
+      );
+
+  @override
   Future<void> crateApiFalaaiCoreSend({
     required FalaaiCore that,
     required DeviceAddress peer,
@@ -562,7 +608,7 @@ class FalaaiCoreLibApiImpl extends FalaaiCoreLibApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 11,
+            funcId: 12,
             port: port_,
           );
         },
@@ -599,7 +645,7 @@ class FalaaiCoreLibApiImpl extends FalaaiCoreLibApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 12,
+            funcId: 13,
             port: port_,
           );
         },
@@ -637,7 +683,7 @@ class FalaaiCoreLibApiImpl extends FalaaiCoreLibApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 13,
+            funcId: 14,
             port: port_,
           );
         },
@@ -667,7 +713,7 @@ class FalaaiCoreLibApiImpl extends FalaaiCoreLibApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 14,
+            funcId: 15,
             port: port_,
           );
         },
@@ -796,8 +842,9 @@ class FalaaiCoreLibApiImpl extends FalaaiCoreLibApiImplPlatform
     switch (raw[0]) {
       case 0:
         return ChatEvent_MessageReceived(
-          from: dco_decode_box_autoadd_device_address(raw[1]),
-          body: dco_decode_list_prim_u_8_strict(raw[2]),
+          id: dco_decode_i_64(raw[1]),
+          from: dco_decode_box_autoadd_device_address(raw[2]),
+          body: dco_decode_list_prim_u_8_strict(raw[3]),
         );
       default:
         throw Exception("unreachable");
@@ -838,6 +885,12 @@ class FalaaiCoreLibApiImpl extends FalaaiCoreLibApiImplPlatform
   }
 
   @protected
+  PlatformInt64 dco_decode_i_64(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return dcoDecodeI64(raw);
+  }
+
+  @protected
   List<Uint8List> dco_decode_list_list_prim_u_8_strict(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return (raw as List<dynamic>).map(dco_decode_list_prim_u_8_strict).toList();
@@ -859,6 +912,12 @@ class FalaaiCoreLibApiImpl extends FalaaiCoreLibApiImplPlatform
   Uint8List dco_decode_list_prim_u_8_strict(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw as Uint8List;
+  }
+
+  @protected
+  List<ReceivedMessage> dco_decode_list_received_message(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return (raw as List<dynamic>).map(dco_decode_received_message).toList();
   }
 
   @protected
@@ -897,6 +956,20 @@ class FalaaiCoreLibApiImpl extends FalaaiCoreLibApiImplPlatform
       preKey: dco_decode_opt_box_autoadd_pre_key(arr[2]),
       signedPreKey: dco_decode_signed_pre_key(arr[3]),
       kyberPreKey: dco_decode_signed_pre_key(arr[4]),
+    );
+  }
+
+  @protected
+  ReceivedMessage dco_decode_received_message(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 4)
+      throw Exception('unexpected arr length: expect 4 but see ${arr.length}');
+    return ReceivedMessage(
+      id: dco_decode_i_64(arr[0]),
+      from: dco_decode_device_address(arr[1]),
+      serverTimestamp: dco_decode_u_64(arr[2]),
+      body: dco_decode_list_prim_u_8_strict(arr[3]),
     );
   }
 
@@ -1082,9 +1155,14 @@ class FalaaiCoreLibApiImpl extends FalaaiCoreLibApiImplPlatform
     var tag_ = sse_decode_i_32(deserializer);
     switch (tag_) {
       case 0:
+        var var_id = sse_decode_i_64(deserializer);
         var var_from = sse_decode_box_autoadd_device_address(deserializer);
         var var_body = sse_decode_list_prim_u_8_strict(deserializer);
-        return ChatEvent_MessageReceived(from: var_from, body: var_body);
+        return ChatEvent_MessageReceived(
+          id: var_id,
+          from: var_from,
+          body: var_body,
+        );
       default:
         throw UnimplementedError('');
     }
@@ -1116,6 +1194,12 @@ class FalaaiCoreLibApiImpl extends FalaaiCoreLibApiImplPlatform
   int sse_decode_i_32(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return deserializer.buffer.getInt32();
+  }
+
+  @protected
+  PlatformInt64 sse_decode_i_64(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return deserializer.buffer.getPlatformInt64();
   }
 
   @protected
@@ -1156,6 +1240,20 @@ class FalaaiCoreLibApiImpl extends FalaaiCoreLibApiImplPlatform
     // Codec=Sse (Serialization based), see doc to use other codecs
     var len_ = sse_decode_i_32(deserializer);
     return deserializer.buffer.getUint8List(len_);
+  }
+
+  @protected
+  List<ReceivedMessage> sse_decode_list_received_message(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <ReceivedMessage>[];
+    for (var idx_ = 0; idx_ < len_; ++idx_) {
+      ans_.add(sse_decode_received_message(deserializer));
+    }
+    return ans_;
   }
 
   @protected
@@ -1205,6 +1303,21 @@ class FalaaiCoreLibApiImpl extends FalaaiCoreLibApiImplPlatform
       preKey: var_preKey,
       signedPreKey: var_signedPreKey,
       kyberPreKey: var_kyberPreKey,
+    );
+  }
+
+  @protected
+  ReceivedMessage sse_decode_received_message(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_id = sse_decode_i_64(deserializer);
+    var var_from = sse_decode_device_address(deserializer);
+    var var_serverTimestamp = sse_decode_u_64(deserializer);
+    var var_body = sse_decode_list_prim_u_8_strict(deserializer);
+    return ReceivedMessage(
+      id: var_id,
+      from: var_from,
+      serverTimestamp: var_serverTimestamp,
+      body: var_body,
     );
   }
 
@@ -1399,8 +1512,13 @@ class FalaaiCoreLibApiImpl extends FalaaiCoreLibApiImplPlatform
   void sse_encode_chat_event(ChatEvent self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     switch (self) {
-      case ChatEvent_MessageReceived(from: final from, body: final body):
+      case ChatEvent_MessageReceived(
+        id: final id,
+        from: final from,
+        body: final body,
+      ):
         sse_encode_i_32(0, serializer);
+        sse_encode_i_64(id, serializer);
         sse_encode_box_autoadd_device_address(from, serializer);
         sse_encode_list_prim_u_8_strict(body, serializer);
     }
@@ -1429,6 +1547,12 @@ class FalaaiCoreLibApiImpl extends FalaaiCoreLibApiImplPlatform
   void sse_encode_i_32(int self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     serializer.buffer.putInt32(self);
+  }
+
+  @protected
+  void sse_encode_i_64(PlatformInt64 self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    serializer.buffer.putPlatformInt64(self);
   }
 
   @protected
@@ -1475,6 +1599,18 @@ class FalaaiCoreLibApiImpl extends FalaaiCoreLibApiImplPlatform
   }
 
   @protected
+  void sse_encode_list_received_message(
+    List<ReceivedMessage> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    for (final item in self) {
+      sse_encode_received_message(item, serializer);
+    }
+  }
+
+  @protected
   void sse_encode_list_signed_pre_key(
     List<SignedPreKey> self,
     SseSerializer serializer,
@@ -1514,6 +1650,18 @@ class FalaaiCoreLibApiImpl extends FalaaiCoreLibApiImplPlatform
     sse_encode_opt_box_autoadd_pre_key(self.preKey, serializer);
     sse_encode_signed_pre_key(self.signedPreKey, serializer);
     sse_encode_signed_pre_key(self.kyberPreKey, serializer);
+  }
+
+  @protected
+  void sse_encode_received_message(
+    ReceivedMessage self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_64(self.id, serializer);
+    sse_encode_device_address(self.from, serializer);
+    sse_encode_u_64(self.serverTimestamp, serializer);
+    sse_encode_list_prim_u_8_strict(self.body, serializer);
   }
 
   @protected
@@ -1586,7 +1734,8 @@ class FalaaiCoreImpl extends RustOpaque implements FalaaiCore {
   /// `true` se outro processo gravou no banco desde a última chamada ou, na primeira, desde a
   /// abertura: a extensão de notificação do iOS decifrou mensagens ou abriu sessões (ou o app,
   /// visto da extensão). O app chama ao voltar ao primeiro plano e ao receber o aviso da
-  /// extensão, para recarregar o que mostra; o aviso entre processos é da plataforma.
+  /// extensão, para recarregar o que mostra (as mensagens com [`Self::received_messages`]); o
+  /// aviso entre processos é da plataforma.
   Future<bool> changedByOtherProcess() => FalaaiCoreLib.instance.api
       .crateApiFalaaiCoreChangedByOtherProcess(that: this);
 
@@ -1594,8 +1743,8 @@ class FalaaiCoreImpl extends RustOpaque implements FalaaiCore {
   /// Exige o endereço local ([`Self::set_local_address`]).
   ///
   /// Volta logo: o socket autenticado conecta em segundo plano e reconecta sozinho quando cai.
-  /// Cada envelope que chega é decifrado e entregue no stream de [`Self::events`], como em
-  /// [`Self::decrypt`], e só então confirmado ao servidor. Um envelope que nunca vai abrir
+  /// Cada envelope que chega é decifrado, gravado e entregue no stream de [`Self::events`], como
+  /// em [`Self::decrypt`], e só então confirmado ao servidor. Um envelope que nunca vai abrir
   /// (adulterado, duplicado, de identidade não confiável) também é confirmado e descartado; um
   /// que falhou por causa local (sem assinante, banco ocupado) fica na fila e volta na próxima
   /// conexão. Conectar de novo troca a conexão anterior.
@@ -1606,16 +1755,18 @@ class FalaaiCoreImpl extends RustOpaque implements FalaaiCore {
         token: token,
       );
 
-  /// Abre e decifra um envelope selado e entrega o texto, com o remetente tirado do certificado,
-  /// no stream de [`Self::events`] como [`ChatEvent::MessageReceived`]. `server_timestamp` é o
-  /// do `Deliver` (milissegundos desde a época Unix): o certificado de remetente tem de valer
-  /// nesse instante, então uma mensagem que esperou na fila ainda abre. `Ok` quer dizer que o
-  /// evento foi entregue e o envelope pode ser confirmado ao servidor.
+  /// Abre e decifra um envelope selado, grava a mensagem no banco local e entrega o texto, com o
+  /// remetente tirado do certificado, no stream de [`Self::events`] como
+  /// [`ChatEvent::MessageReceived`]. `server_timestamp` é o do `Deliver` (milissegundos desde a
+  /// época Unix): o certificado de remetente tem de valer nesse instante, então uma mensagem que
+  /// esperou na fila ainda abre. `Ok` quer dizer que a mensagem foi gravada e o evento entregue,
+  /// e o envelope pode ser confirmado ao servidor.
   ///
-  /// Decifrar e entregar são atômicos: sem assinante, ou com o stream fechado na entrega, falha
-  /// com [`CoreError::NoEventListener`] e o ratchet não avança, então o mesmo envelope decifra
-  /// de novo. Enquanto o app ou a extensão de notificação decifra, o outro processo espera;
-  /// passado o timeout, falha com [`CoreError::DatabaseBusy`] e o envelope fica para depois.
+  /// Decifrar, gravar e entregar são atômicos: sem assinante, ou com o stream fechado na
+  /// entrega, falha com [`CoreError::NoEventListener`], nada é gravado e o ratchet não avança,
+  /// então o mesmo envelope decifra de novo. Enquanto o app ou a extensão de notificação
+  /// decifra, o outro processo espera; passado o timeout, falha com [`CoreError::DatabaseBusy`]
+  /// e o envelope fica para depois.
   Future<void> decrypt({
     required Envelope envelope,
     required BigInt serverTimestamp,
@@ -1664,6 +1815,22 @@ class FalaaiCoreImpl extends RustOpaque implements FalaaiCore {
     that: this,
     peer: peer,
     bundle: bundle,
+  );
+
+  /// Até `limit` mensagens recebidas com id maior que `after`, em ordem de id: as que este
+  /// processo entregou em [`ChatEvent::MessageReceived`] e as que o outro (a extensão de
+  /// notificação) decifrou e gravou. Comece com `after = 0` e passe o id da última lida.
+  ///
+  /// O id cresce na ordem em que as mensagens foram gravadas por qualquer dos processos, então
+  /// o id de um evento não serve de cursor: a extensão pode ter gravado ids menores ainda não
+  /// lidos. Mensagens já recebidas por evento voltam aqui; o app deduplica pelo id.
+  Future<List<ReceivedMessage>> receivedMessages({
+    required PlatformInt64 after,
+    required int limit,
+  }) => FalaaiCoreLib.instance.api.crateApiFalaaiCoreReceivedMessages(
+    that: this,
+    after: after,
+    limit: limit,
   );
 
   /// Envia a `peer` um envelope de [`Self::encrypt`], identificado por `client_message_id`

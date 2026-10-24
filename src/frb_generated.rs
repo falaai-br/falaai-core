@@ -40,7 +40,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.13.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 207898981;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -294658907;
 
 // Section: executor
 
@@ -554,6 +554,61 @@ fn wire__crate__api__FalaaiCore_process_prekey_bundle_impl(
         },
     )
 }
+fn wire__crate__api__FalaaiCore_received_messages_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "FalaaiCore_received_messages",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_that = <RustOpaqueMoi<
+                flutter_rust_bridge::for_generated::RustAutoOpaqueInner<FalaaiCore>,
+            >>::sse_decode(&mut deserializer);
+            let api_after = <i64>::sse_decode(&mut deserializer);
+            let api_limit = <u32>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, crate::api::error::CoreError>((move || {
+                    let mut api_that_guard = None;
+                    let decode_indices_ =
+                        flutter_rust_bridge::for_generated::lockable_compute_decode_order(vec![
+                            flutter_rust_bridge::for_generated::LockableOrderInfo::new(
+                                &api_that, 0, false,
+                            ),
+                        ]);
+                    for i in decode_indices_ {
+                        match i {
+                            0 => api_that_guard = Some(api_that.lockable_decode_sync_ref()),
+                            _ => unreachable!(),
+                        }
+                    }
+                    let api_that_guard = api_that_guard.unwrap();
+                    let output_ok = crate::api::FalaaiCore::received_messages(
+                        &*api_that_guard,
+                        api_after,
+                        api_limit,
+                    )?;
+                    std::result::Result::Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
 fn wire__crate__api__FalaaiCore_send_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
@@ -836,9 +891,11 @@ impl SseDecode for crate::api::types::ChatEvent {
         let mut tag_ = <i32>::sse_decode(deserializer);
         match tag_ {
             0 => {
+                let mut var_id = <i64>::sse_decode(deserializer);
                 let mut var_from = <crate::api::types::DeviceAddress>::sse_decode(deserializer);
                 let mut var_body = <Vec<u8>>::sse_decode(deserializer);
                 return crate::api::types::ChatEvent::MessageReceived {
+                    id: var_id,
                     from: var_from,
                     body: var_body,
                 };
@@ -912,6 +969,13 @@ impl SseDecode for i32 {
     }
 }
 
+impl SseDecode for i64 {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        deserializer.cursor.read_i64::<NativeEndian>().unwrap()
+    }
+}
+
 impl SseDecode for Vec<Vec<u8>> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -943,6 +1007,20 @@ impl SseDecode for Vec<u8> {
         let mut ans_ = Vec::with_capacity(len_ as usize);
         for idx_ in 0..len_ {
             ans_.push(<u8>::sse_decode(deserializer));
+        }
+        return ans_;
+    }
+}
+
+impl SseDecode for Vec<crate::api::types::ReceivedMessage> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut len_ = <i32>::sse_decode(deserializer);
+        let mut ans_ = Vec::with_capacity(len_ as usize);
+        for idx_ in 0..len_ {
+            ans_.push(<crate::api::types::ReceivedMessage>::sse_decode(
+                deserializer,
+            ));
         }
         return ans_;
     }
@@ -997,6 +1075,22 @@ impl SseDecode for crate::api::types::PreKeyBundle {
             pre_key: var_preKey,
             signed_pre_key: var_signedPreKey,
             kyber_pre_key: var_kyberPreKey,
+        };
+    }
+}
+
+impl SseDecode for crate::api::types::ReceivedMessage {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_id = <i64>::sse_decode(deserializer);
+        let mut var_from = <crate::api::types::DeviceAddress>::sse_decode(deserializer);
+        let mut var_serverTimestamp = <u64>::sse_decode(deserializer);
+        let mut var_body = <Vec<u8>>::sse_decode(deserializer);
+        return crate::api::types::ReceivedMessage {
+            id: var_id,
+            from: var_from,
+            server_timestamp: var_serverTimestamp,
+            body: var_body,
         };
     }
 }
@@ -1101,17 +1195,20 @@ fn pde_ffi_dispatcher_primary_impl(
             rust_vec_len,
             data_len,
         ),
-        11 => wire__crate__api__FalaaiCore_send_impl(port, ptr, rust_vec_len, data_len),
-        12 => {
+        11 => {
+            wire__crate__api__FalaaiCore_received_messages_impl(port, ptr, rust_vec_len, data_len)
+        }
+        12 => wire__crate__api__FalaaiCore_send_impl(port, ptr, rust_vec_len, data_len),
+        13 => {
             wire__crate__api__FalaaiCore_set_local_address_impl(port, ptr, rust_vec_len, data_len)
         }
-        13 => wire__crate__api__FalaaiCore_set_sender_certificate_impl(
+        14 => wire__crate__api__FalaaiCore_set_sender_certificate_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        14 => wire__crate__api__generate_db_key_impl(port, ptr, rust_vec_len, data_len),
+        15 => wire__crate__api__generate_db_key_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -1174,8 +1271,9 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::types::AccountKeys>
 impl flutter_rust_bridge::IntoDart for crate::api::types::ChatEvent {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         match self {
-            crate::api::types::ChatEvent::MessageReceived { from, body } => [
+            crate::api::types::ChatEvent::MessageReceived { id, from, body } => [
                 0.into_dart(),
+                id.into_into_dart().into_dart(),
                 from.into_into_dart().into_dart(),
                 body.into_into_dart().into_dart(),
             ]
@@ -1311,6 +1409,29 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::types::PreKeyBundle>
     }
 }
 // Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::types::ReceivedMessage {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.id.into_into_dart().into_dart(),
+            self.from.into_into_dart().into_dart(),
+            self.server_timestamp.into_into_dart().into_dart(),
+            self.body.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::types::ReceivedMessage
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::types::ReceivedMessage>
+    for crate::api::types::ReceivedMessage
+{
+    fn into_into_dart(self) -> crate::api::types::ReceivedMessage {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
 impl flutter_rust_bridge::IntoDart for crate::api::types::ServerConfig {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         [
@@ -1419,8 +1540,9 @@ impl SseEncode for crate::api::types::ChatEvent {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         match self {
-            crate::api::types::ChatEvent::MessageReceived { from, body } => {
+            crate::api::types::ChatEvent::MessageReceived { id, from, body } => {
                 <i32>::sse_encode(0, serializer);
+                <i64>::sse_encode(id, serializer);
                 <crate::api::types::DeviceAddress>::sse_encode(from, serializer);
                 <Vec<u8>>::sse_encode(body, serializer);
             }
@@ -1492,6 +1614,13 @@ impl SseEncode for i32 {
     }
 }
 
+impl SseEncode for i64 {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        serializer.cursor.write_i64::<NativeEndian>(self).unwrap();
+    }
+}
+
 impl SseEncode for Vec<Vec<u8>> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -1518,6 +1647,16 @@ impl SseEncode for Vec<u8> {
         <i32>::sse_encode(self.len() as _, serializer);
         for item in self {
             <u8>::sse_encode(item, serializer);
+        }
+    }
+}
+
+impl SseEncode for Vec<crate::api::types::ReceivedMessage> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(self.len() as _, serializer);
+        for item in self {
+            <crate::api::types::ReceivedMessage>::sse_encode(item, serializer);
         }
     }
 }
@@ -1558,6 +1697,16 @@ impl SseEncode for crate::api::types::PreKeyBundle {
         <Option<crate::api::types::PreKey>>::sse_encode(self.pre_key, serializer);
         <crate::api::types::SignedPreKey>::sse_encode(self.signed_pre_key, serializer);
         <crate::api::types::SignedPreKey>::sse_encode(self.kyber_pre_key, serializer);
+    }
+}
+
+impl SseEncode for crate::api::types::ReceivedMessage {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i64>::sse_encode(self.id, serializer);
+        <crate::api::types::DeviceAddress>::sse_encode(self.from, serializer);
+        <u64>::sse_encode(self.server_timestamp, serializer);
+        <Vec<u8>>::sse_encode(self.body, serializer);
     }
 }
 

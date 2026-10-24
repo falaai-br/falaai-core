@@ -11,9 +11,13 @@
 //! `accounts` com [`FalaaiCore::set_sender_certificate`].
 //!
 //! O transporte também é do núcleo: o app não abre socket nem HTTPS. [`FalaaiCore::connect`]
-//! abre o socket autenticado, que recebe, decifra e confirma envelopes em segundo plano;
+//! abre o socket autenticado, que recebe, decifra, grava e confirma envelopes em segundo plano;
 //! [`FalaaiCore::send`] envia pelo socket não autenticado sempre que tem a unidentified access
 //! key do destinatário (ADR-0010).
+//!
+//! Toda mensagem recebida é gravada no banco local na mesma transação que avança o ratchet, por
+//! quem a decifrar: o app ou a Notification Service Extension do iOS. O evento só chega ao
+//! processo que decifrou; o outro lê o que foi gravado com [`FalaaiCore::received_messages`].
 //!
 //! As funções são síncronas no Rust e o flutter_rust_bridge as roda no seu pool de threads; no
 //! Dart todas devolvem `Future`. Os futuros da libsignal não são `Send` e os stores sobre SQLite
@@ -35,8 +39,11 @@ use uuid::Uuid;
 use zeroize::Zeroizing;
 
 use self::error::CoreError;
-use self::types::{AccountKeys, ChatEvent, DeviceAddress, Envelope, PreKeyBundle, ServerConfig};
+use self::types::{
+    AccountKeys, ChatEvent, DeviceAddress, Envelope, PreKeyBundle, ReceivedMessage, ServerConfig,
+};
 use crate::frb_generated::StreamSink;
+use crate::messaging::Inbox;
 use crate::protocol::access::AccessKey;
 use crate::protocol::certificate::TrustRoot;
 use crate::protocol::signal::LibsignalSessions;
@@ -60,6 +67,7 @@ pub fn generate_db_key() -> Vec<u8> {
 pub struct FalaaiCore {
     db: Arc<Database>,
     store: SqliteStore,
+    inbox: Inbox,
     trust_root: TrustRoot,
     /// Vazio até o endereço local ser conhecido: a libsignal precisa dele nas sessões.
     /// Compartilhado com a thread do socket autenticado, que decifra o que chega.
@@ -90,12 +98,14 @@ impl FalaaiCore {
         let key = DatabaseKey::from_bytes(&db_key)?;
         let db = Arc::new(Database::open(Path::new(&db_path), &key)?);
         let store = SqliteStore::new(db.clone());
+        let inbox = Inbox::new(db.clone());
         let sessions = store.local_address()?.map(|local| {
             LibsignalSessions::new(local, trust_root.clone(), SqliteStores::new(db.clone()))
         });
         Ok(Self {
             db,
             store,
+            inbox,
             trust_root,
             sessions: Arc::new(Mutex::new(sessions)),
             events: Arc::new(Mutex::new(None)),
@@ -157,19 +167,22 @@ impl FalaaiCore {
         Ok(envelope.into())
     }
 
-    /// Abre e decifra um envelope selado e entrega o texto, com o remetente tirado do certificado,
-    /// no stream de [`Self::events`] como [`ChatEvent::MessageReceived`]. `server_timestamp` é o
-    /// do `Deliver` (milissegundos desde a época Unix): o certificado de remetente tem de valer
-    /// nesse instante, então uma mensagem que esperou na fila ainda abre. `Ok` quer dizer que o
-    /// evento foi entregue e o envelope pode ser confirmado ao servidor.
+    /// Abre e decifra um envelope selado, grava a mensagem no banco local e entrega o texto, com o
+    /// remetente tirado do certificado, no stream de [`Self::events`] como
+    /// [`ChatEvent::MessageReceived`]. `server_timestamp` é o do `Deliver` (milissegundos desde a
+    /// época Unix): o certificado de remetente tem de valer nesse instante, então uma mensagem que
+    /// esperou na fila ainda abre. `Ok` quer dizer que a mensagem foi gravada e o evento entregue,
+    /// e o envelope pode ser confirmado ao servidor.
     ///
-    /// Decifrar e entregar são atômicos: sem assinante, ou com o stream fechado na entrega, falha
-    /// com [`CoreError::NoEventListener`] e o ratchet não avança, então o mesmo envelope decifra
-    /// de novo. Enquanto o app ou a extensão de notificação decifra, o outro processo espera;
-    /// passado o timeout, falha com [`CoreError::DatabaseBusy`] e o envelope fica para depois.
+    /// Decifrar, gravar e entregar são atômicos: sem assinante, ou com o stream fechado na
+    /// entrega, falha com [`CoreError::NoEventListener`], nada é gravado e o ratchet não avança,
+    /// então o mesmo envelope decifra de novo. Enquanto o app ou a extensão de notificação
+    /// decifra, o outro processo espera; passado o timeout, falha com [`CoreError::DatabaseBusy`]
+    /// e o envelope fica para depois.
     pub fn decrypt(&self, envelope: Envelope, server_timestamp: u64) -> Result<(), CoreError> {
         receive(
             &self.sessions,
+            &self.inbox,
             &self.events,
             &protocol::Ciphertext::from(envelope),
             server_timestamp,
@@ -179,17 +192,34 @@ impl FalaaiCore {
     /// `true` se outro processo gravou no banco desde a última chamada ou, na primeira, desde a
     /// abertura: a extensão de notificação do iOS decifrou mensagens ou abriu sessões (ou o app,
     /// visto da extensão). O app chama ao voltar ao primeiro plano e ao receber o aviso da
-    /// extensão, para recarregar o que mostra; o aviso entre processos é da plataforma.
+    /// extensão, para recarregar o que mostra (as mensagens com [`Self::received_messages`]); o
+    /// aviso entre processos é da plataforma.
     pub fn changed_by_other_process(&self) -> Result<bool, CoreError> {
         Ok(self.db.changed_elsewhere()?)
+    }
+
+    /// Até `limit` mensagens recebidas com id maior que `after`, em ordem de id: as que este
+    /// processo entregou em [`ChatEvent::MessageReceived`] e as que o outro (a extensão de
+    /// notificação) decifrou e gravou. Comece com `after = 0` e passe o id da última lida.
+    ///
+    /// O id cresce na ordem em que as mensagens foram gravadas por qualquer dos processos, então
+    /// o id de um evento não serve de cursor: a extensão pode ter gravado ids menores ainda não
+    /// lidos. Mensagens já recebidas por evento voltam aqui; o app deduplica pelo id.
+    pub fn received_messages(
+        &self,
+        after: i64,
+        limit: u32,
+    ) -> Result<Vec<ReceivedMessage>, CoreError> {
+        let messages = self.inbox.after(after, limit)?;
+        Ok(messages.into_iter().map(ReceivedMessage::from).collect())
     }
 
     /// Conecta ao servidor com o token que o `accounts` emitiu no registro deste dispositivo.
     /// Exige o endereço local ([`Self::set_local_address`]).
     ///
     /// Volta logo: o socket autenticado conecta em segundo plano e reconecta sozinho quando cai.
-    /// Cada envelope que chega é decifrado e entregue no stream de [`Self::events`], como em
-    /// [`Self::decrypt`], e só então confirmado ao servidor. Um envelope que nunca vai abrir
+    /// Cada envelope que chega é decifrado, gravado e entregue no stream de [`Self::events`], como
+    /// em [`Self::decrypt`], e só então confirmado ao servidor. Um envelope que nunca vai abrir
     /// (adulterado, duplicado, de identidade não confiável) também é confirmado e descartado; um
     /// que falhou por causa local (sem assinante, banco ocupado) fica na fila e volta na próxima
     /// conexão. Conectar de novo troca a conexão anterior.
@@ -202,10 +232,14 @@ impl FalaaiCore {
         )?;
         let local = self.store.local_address()?.ok_or(CoreError::NoAccount)?;
         let credentials = Credentials::new(local.aci(), local.device_id(), token);
-        let (sessions, events) = (self.sessions.clone(), self.events.clone());
+        let (sessions, inbox, events) = (
+            self.sessions.clone(),
+            self.inbox.clone(),
+            self.events.clone(),
+        );
         let transport = Transport::connect(&server, credentials, move |content, timestamp| {
             let envelope = protocol::Ciphertext::new(content.to_vec());
-            disposition(receive(&sessions, &events, &envelope, timestamp))
+            disposition(receive(&sessions, &inbox, &events, &envelope, timestamp))
         })?;
         *lock(&self.transport) = Some(Arc::new(transport));
         Ok(())
@@ -302,11 +336,13 @@ where
     Ok(f(sessions)?)
 }
 
-/// Abre e decifra `envelope` e entrega o texto ao assinante de eventos, numa transação só: sem
-/// assinante, ou com o stream fechado na entrega, falha com [`CoreError::NoEventListener`] e o
-/// ratchet não avança, então o mesmo envelope decifra de novo quando o servidor o reentregar.
+/// Abre e decifra `envelope`, grava a mensagem em `inbox` e entrega o texto ao assinante de
+/// eventos, numa transação só: sem assinante, ou com o stream fechado na entrega, falha com
+/// [`CoreError::NoEventListener`], nada fica gravado e o ratchet não avança, então o mesmo
+/// envelope decifra de novo quando o servidor o reentregar.
 fn receive(
     sessions: &Mutex<Option<CoreSessions>>,
+    inbox: &Inbox,
     events: &Mutex<Option<Deliver>>,
     envelope: &protocol::Ciphertext,
     server_timestamp: u64,
@@ -316,7 +352,10 @@ fn receive(
     let deliver = events.as_ref().ok_or(CoreError::NoEventListener)?;
     with_sessions(sessions, |sessions| {
         block_on(sessions.decrypt(envelope, server_timestamp, |decrypted| {
+            // Roda na thread dona da transação do decrypt: grava junto com o ratchet.
+            let id = inbox.record(&decrypted.from, server_timestamp, &decrypted.plaintext)?;
             let event = ChatEvent::MessageReceived {
+                id,
                 from: DeviceAddress::from(&decrypted.from),
                 body: decrypted.plaintext.to_vec(),
             };
@@ -499,14 +538,29 @@ mod tests {
             Ok(self.core.decrypt(envelope, now_millis()?)?)
         }
 
+        /// Decifra, confere o remetente e que a mensagem do evento ficou gravada, e devolve o
+        /// texto.
         fn receive(&self, from: &Device, envelope: Envelope) -> Result<Vec<u8>, Box<dyn Error>> {
             self.deliver(envelope)?;
             match self.events.try_recv()? {
-                ChatEvent::MessageReceived { from: sender, body } => {
+                ChatEvent::MessageReceived {
+                    id,
+                    from: sender,
+                    body,
+                } => {
                     assert_eq!(sender, from.address);
+                    let stored = self.core.received_messages(id - 1, 1)?;
+                    let stored = stored.first().ok_or("mensagem não gravada")?;
+                    assert_eq!((stored.id, &stored.body), (id, &body));
                     Ok(body)
                 }
             }
+        }
+
+        /// Textos gravados no banco, em ordem.
+        fn stored(&self) -> Result<Vec<Vec<u8>>, CoreError> {
+            let messages = self.core.received_messages(0, u32::MAX)?;
+            Ok(messages.into_iter().map(|m| m.body).collect())
         }
     }
 
@@ -631,6 +685,7 @@ mod tests {
             unsubscribed.decrypt(first.clone(), now_millis()?),
             Err(CoreError::NoEventListener)
         );
+        assert!(bob.stored()?.is_empty());
         assert_eq!(bob.receive(&alice, first)?, b"oi, bob");
         Ok(())
     }
@@ -645,9 +700,64 @@ mod tests {
             bob.core.decrypt(first.clone(), now_millis()?),
             Err(CoreError::NoEventListener)
         );
+        assert!(bob.stored()?.is_empty(), "gravada sem entrega");
         // O servidor reentrega o envelope não confirmado.
         bob.events = subscribe(&bob.core);
         assert_eq!(bob.receive(&alice, first)?, b"oi, bob");
+        assert_eq!(bob.stored()?, [b"oi, bob"]);
+        Ok(())
+    }
+
+    #[test]
+    fn mensagem_decifrada_pela_extensao_fica_gravada_para_o_app() -> TestResult {
+        let server = Server::new()?;
+        let (alice, app) = alice_and_bob(&server)?;
+        let extension = app.other_process(&server, 0xB0)?;
+        let first = alice.send(&app, b"oi, bob")?;
+        let second = alice.send(&app, b"tudo bem?")?;
+
+        // A extensão decifra com o app em segundo plano: o evento fica nela.
+        let sent_at = now_millis()?;
+        extension.core.decrypt(first, sent_at)?;
+        assert!(app.events.try_recv().is_err());
+
+        assert!(app.core.changed_by_other_process()?);
+        let unread = app.core.received_messages(0, 10)?;
+        let [from_extension] = unread.as_slice() else {
+            return Err("esperava uma mensagem".into());
+        };
+        assert_eq!(from_extension.from, alice.address);
+        assert_eq!(from_extension.server_timestamp, sent_at);
+        assert_eq!(from_extension.body, b"oi, bob");
+
+        assert_eq!(app.receive(&alice, second)?, b"tudo bem?");
+        let after = app.core.received_messages(from_extension.id, 10)?;
+        assert_eq!(
+            after.iter().map(|m| &m.body[..]).collect::<Vec<_>>(),
+            [b"tudo bem?"]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn mensagem_que_nao_abre_nao_fica_gravada() -> TestResult {
+        let server = Server::new()?;
+        let (alice, bob) = alice_and_bob(&server)?;
+        let first = alice.send(&bob, b"oi, bob")?;
+        let mut tampered = first.clone();
+        if let Some(last) = tampered.body.last_mut() {
+            *last ^= 0x01;
+        }
+        assert_eq!(
+            bob.core.decrypt(tampered, now_millis()?),
+            Err(CoreError::InvalidMessage)
+        );
+        bob.receive(&alice, first.clone())?;
+        assert_eq!(
+            bob.core.decrypt(first, now_millis()?),
+            Err(CoreError::DuplicateMessage)
+        );
+        assert_eq!(bob.stored()?, [b"oi, bob"]);
         Ok(())
     }
 
@@ -860,13 +970,24 @@ mod tests {
     fn debug_dos_tipos_da_api_omite_aci_e_conteudo() {
         let from = address(0xA1);
         let event = ChatEvent::MessageReceived {
+            id: 7,
             from: from.clone(),
             body: b"segredo".to_vec(),
         };
         let envelope = Envelope {
             body: b"segredo".to_vec(),
         };
-        for debug in [format!("{event:?}"), format!("{envelope:?}")] {
+        let message = ReceivedMessage {
+            id: 7,
+            from: from.clone(),
+            server_timestamp: 1,
+            body: b"segredo".to_vec(),
+        };
+        for debug in [
+            format!("{event:?}"),
+            format!("{envelope:?}"),
+            format!("{message:?}"),
+        ] {
             assert!(!debug.contains(&from.aci), "{debug}");
             assert!(!debug.contains("segredo"), "{debug}");
             assert!(!debug.contains("115, 101"), "{debug}");

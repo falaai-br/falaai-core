@@ -76,4 +76,15 @@ pub(super) const MIGRATIONS: &[&str] = &[
         profile_key BLOB NOT NULL CHECK (length(profile_key) = 32)
     ) STRICT;
     ",
+    // 4: mensagens recebidas, gravadas na mesma transação que avança o ratchet. AUTOINCREMENT:
+    // o id é o cursor do app e nunca volta a ser usado depois de apagar a última mensagem.
+    "
+    CREATE TABLE received_messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        sender_aci TEXT NOT NULL,
+        sender_device_id INTEGER NOT NULL,
+        server_timestamp INTEGER NOT NULL,
+        body BLOB NOT NULL
+    ) STRICT;
+    ",
 ];

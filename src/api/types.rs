@@ -3,6 +3,7 @@
 
 use std::fmt;
 
+use crate::messaging::InboxMessage;
 use crate::protocol::keys;
 use crate::protocol::{self, Address, ProtocolError, PublicPreKey, SignedPublicPreKey};
 
@@ -208,8 +209,10 @@ pub struct ServerConfig {
 /// Evento emitido pelo núcleo no stream de [`super::FalaaiCore::events`].
 #[derive(Clone, PartialEq, Eq)]
 pub enum ChatEvent {
-    /// Mensagem decifrada de um contato.
+    /// Mensagem decifrada de um contato, já gravada no banco local.
     MessageReceived {
+        /// Id da mensagem no banco, o mesmo de [`ReceivedMessage::id`].
+        id: i64,
         /// Dispositivo que enviou, conforme o certificado de remetente.
         from: DeviceAddress,
         /// Texto decifrado.
@@ -220,11 +223,48 @@ pub enum ChatEvent {
 impl fmt::Debug for ChatEvent {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::MessageReceived { from, body } => f
+            Self::MessageReceived { id, from, body } => f
                 .debug_struct("MessageReceived")
+                .field("id", id)
                 .field("from", from)
                 .field("len", &body.len())
                 .finish(),
+        }
+    }
+}
+
+/// Mensagem recebida, lida do banco local com [`super::FalaaiCore::received_messages`].
+#[derive(Clone, PartialEq, Eq)]
+pub struct ReceivedMessage {
+    /// Id da mensagem no banco. Cresce na ordem em que as mensagens foram gravadas, pelo app ou
+    /// pela extensão de notificação; serve de cursor.
+    pub id: i64,
+    /// Dispositivo que enviou, conforme o certificado de remetente.
+    pub from: DeviceAddress,
+    /// Instante em que o servidor recebeu o envelope, em milissegundos desde a época Unix.
+    pub server_timestamp: u64,
+    /// Texto decifrado.
+    pub body: Vec<u8>,
+}
+
+impl fmt::Debug for ReceivedMessage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ReceivedMessage")
+            .field("id", &self.id)
+            .field("from", &self.from)
+            .field("server_timestamp", &self.server_timestamp)
+            .field("len", &self.body.len())
+            .finish()
+    }
+}
+
+impl From<InboxMessage> for ReceivedMessage {
+    fn from(message: InboxMessage) -> Self {
+        Self {
+            id: message.id,
+            from: DeviceAddress::from(&message.from),
+            server_timestamp: message.server_timestamp,
+            body: message.body.to_vec(),
         }
     }
 }

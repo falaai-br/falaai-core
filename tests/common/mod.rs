@@ -126,9 +126,9 @@ impl Device {
         self.core.sealed_kind(envelope)
     }
 
-    /// Decifra um envelope que deve vir de `from`, entregue agora. No sucesso, devolve o texto
-    /// que chegou no stream de eventos; na falha, devolve o erro do núcleo e confere que nenhum
-    /// evento saiu.
+    /// Decifra um envelope que deve vir de `from`, entregue agora. No sucesso, confere que a
+    /// mensagem do evento ficou gravada no banco e devolve o texto que chegou no stream de
+    /// eventos; na falha, devolve o erro do núcleo e confere que nenhum evento saiu.
     pub fn try_receive(
         &self,
         from: &Device,
@@ -136,9 +136,18 @@ impl Device {
     ) -> Result<Result<Vec<u8>, CoreError>, Box<dyn Error>> {
         match self.core.decrypt(envelope, now_millis()?) {
             Ok(()) => match self.events.try_recv()? {
-                ChatEvent::MessageReceived { from: sender, body } => {
+                ChatEvent::MessageReceived {
+                    id,
+                    from: sender,
+                    body,
+                } => {
                     if sender != from.address {
                         return Err("evento com remetente errado".into());
+                    }
+                    let stored = self.core.received_messages(id - 1, 1)?;
+                    match stored.first() {
+                        Some(m) if m.id == id && m.from == sender && m.body == body => {}
+                        _ => return Err("mensagem do evento não ficou gravada".into()),
                     }
                     Ok(Ok(body))
                 }
@@ -173,8 +182,26 @@ impl Device {
         timeout: Duration,
     ) -> Result<(DeviceAddress, Vec<u8>), Box<dyn Error>> {
         match self.events.recv_timeout(timeout)? {
-            ChatEvent::MessageReceived { from, body } => Ok((from, body)),
+            ChatEvent::MessageReceived { from, body, .. } => Ok((from, body)),
         }
+    }
+
+    /// O mesmo aparelho aberto por outro processo, como a Notification Service Extension do iOS:
+    /// outro núcleo sobre o mesmo banco, com o stream de eventos assinado.
+    pub fn other_process(&self) -> Result<Self, Box<dyn Error>> {
+        let core = open(&self.db_path, &self.db_key)?;
+        core.set_sender_certificate(self.sender_certificate.clone())?;
+        let events = subscribe(&core);
+        Ok(Self {
+            address: self.address.clone(),
+            keys: self.keys.clone(),
+            db_path: self.db_path.clone(),
+            db_key: self.db_key.clone(),
+            sender_certificate: self.sender_certificate.clone(),
+            core,
+            events,
+            next_pre_key: self.next_pre_key,
+        })
     }
 
     /// Fecha e reabre o banco, como o app ao voltar do background ou o NSE do iOS ao acordar.
