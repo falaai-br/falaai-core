@@ -12,9 +12,17 @@ pub(crate) enum ProtocolError {
     /// Não há sessão com o dispositivo remoto.
     #[error("sessão inexistente")]
     SessionNotFound,
-    /// A identidade do dispositivo remoto mudou e não foi aceita.
+    /// Conversa verificada cuja chave de identidade do contato mudou: o envio fica bloqueado
+    /// até o usuário verificar a chave nova ou aceitar a troca.
     #[error("identidade remota não confiável")]
     UntrustedIdentity,
+    /// Nenhuma chave de identidade guardada para o contato: ainda não houve bundle nem mensagem
+    /// dele.
+    #[error("identidade do contato desconhecida")]
+    UnknownIdentity,
+    /// O QR lido não é um código de segurança, ou é de uma versão incompatível.
+    #[error("código de segurança inválido")]
+    InvalidSafetyNumber,
     /// Mensagem já decifrada antes.
     #[error("mensagem duplicada")]
     DuplicateMessage,

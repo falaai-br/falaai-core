@@ -122,10 +122,10 @@ return messageFailed(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeWhen<TResult extends Object?>({TResult Function( PlatformInt64 id,  DeviceAddress from,  Uint8List body)?  messageReceived,TResult Function( Uint8List clientMessageId)?  messageSent,TResult Function( Uint8List clientMessageId,  CoreError error)?  messageFailed,required TResult orElse(),}) {final _that = this;
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>({TResult Function( PlatformInt64 id,  DeviceAddress from,  Uint8List body,  bool identityChanged)?  messageReceived,TResult Function( Uint8List clientMessageId)?  messageSent,TResult Function( Uint8List clientMessageId,  CoreError error)?  messageFailed,required TResult orElse(),}) {final _that = this;
 switch (_that) {
 case ChatEvent_MessageReceived() when messageReceived != null:
-return messageReceived(_that.id,_that.from,_that.body);case ChatEvent_MessageSent() when messageSent != null:
+return messageReceived(_that.id,_that.from,_that.body,_that.identityChanged);case ChatEvent_MessageSent() when messageSent != null:
 return messageSent(_that.clientMessageId);case ChatEvent_MessageFailed() when messageFailed != null:
 return messageFailed(_that.clientMessageId,_that.error);case _:
   return orElse();
@@ -145,10 +145,10 @@ return messageFailed(_that.clientMessageId,_that.error);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult when<TResult extends Object?>({required TResult Function( PlatformInt64 id,  DeviceAddress from,  Uint8List body)  messageReceived,required TResult Function( Uint8List clientMessageId)  messageSent,required TResult Function( Uint8List clientMessageId,  CoreError error)  messageFailed,}) {final _that = this;
+@optionalTypeArgs TResult when<TResult extends Object?>({required TResult Function( PlatformInt64 id,  DeviceAddress from,  Uint8List body,  bool identityChanged)  messageReceived,required TResult Function( Uint8List clientMessageId)  messageSent,required TResult Function( Uint8List clientMessageId,  CoreError error)  messageFailed,}) {final _that = this;
 switch (_that) {
 case ChatEvent_MessageReceived():
-return messageReceived(_that.id,_that.from,_that.body);case ChatEvent_MessageSent():
+return messageReceived(_that.id,_that.from,_that.body,_that.identityChanged);case ChatEvent_MessageSent():
 return messageSent(_that.clientMessageId);case ChatEvent_MessageFailed():
 return messageFailed(_that.clientMessageId,_that.error);}
 }
@@ -164,10 +164,10 @@ return messageFailed(_that.clientMessageId,_that.error);}
 /// }
 /// ```
 
-@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>({TResult? Function( PlatformInt64 id,  DeviceAddress from,  Uint8List body)?  messageReceived,TResult? Function( Uint8List clientMessageId)?  messageSent,TResult? Function( Uint8List clientMessageId,  CoreError error)?  messageFailed,}) {final _that = this;
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>({TResult? Function( PlatformInt64 id,  DeviceAddress from,  Uint8List body,  bool identityChanged)?  messageReceived,TResult? Function( Uint8List clientMessageId)?  messageSent,TResult? Function( Uint8List clientMessageId,  CoreError error)?  messageFailed,}) {final _that = this;
 switch (_that) {
 case ChatEvent_MessageReceived() when messageReceived != null:
-return messageReceived(_that.id,_that.from,_that.body);case ChatEvent_MessageSent() when messageSent != null:
+return messageReceived(_that.id,_that.from,_that.body,_that.identityChanged);case ChatEvent_MessageSent() when messageSent != null:
 return messageSent(_that.clientMessageId);case ChatEvent_MessageFailed() when messageFailed != null:
 return messageFailed(_that.clientMessageId,_that.error);case _:
   return null;
@@ -181,7 +181,7 @@ return messageFailed(_that.clientMessageId,_that.error);case _:
 
 
 class ChatEvent_MessageReceived extends ChatEvent {
-  const ChatEvent_MessageReceived({required this.id, required this.from, required this.body}): super._();
+  const ChatEvent_MessageReceived({required this.id, required this.from, required this.body, required this.identityChanged}): super._();
   
 
 /// Id da mensagem no banco, o mesmo de [`ReceivedMessage::id`].
@@ -190,6 +190,11 @@ class ChatEvent_MessageReceived extends ChatEvent {
  final  DeviceAddress from;
 /// Texto decifrado.
  final  Uint8List body;
+/// A chave de identidade da conta de `from` mudou nesta mensagem: o código de segurança
+/// da conversa é outro. O app mostra o aviso neste ponto da conversa; se a conversa
+/// estava verificada, o envio fica bloqueado até o usuário agir
+/// ([`super::FalaaiCore::set_identity_verified`]).
+ final  bool identityChanged;
 
 /// Create a copy of ChatEvent
 /// with the given fields replaced by the non-null parameter values.
@@ -201,16 +206,16 @@ $ChatEvent_MessageReceivedCopyWith<ChatEvent_MessageReceived> get copyWith => _$
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is ChatEvent_MessageReceived&&(identical(other.id, id) || other.id == id)&&(identical(other.from, from) || other.from == from)&&const DeepCollectionEquality().equals(other.body, body));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is ChatEvent_MessageReceived&&(identical(other.id, id) || other.id == id)&&(identical(other.from, from) || other.from == from)&&const DeepCollectionEquality().equals(other.body, body)&&(identical(other.identityChanged, identityChanged) || other.identityChanged == identityChanged));
 }
 
 
 @override
-int get hashCode => Object.hash(runtimeType,id,from,const DeepCollectionEquality().hash(body));
+int get hashCode => Object.hash(runtimeType,id,from,const DeepCollectionEquality().hash(body),identityChanged);
 
 @override
 String toString() {
-  return 'ChatEvent.messageReceived(id: $id, from: $from, body: $body)';
+  return 'ChatEvent.messageReceived(id: $id, from: $from, body: $body, identityChanged: $identityChanged)';
 }
 
 
@@ -221,7 +226,7 @@ abstract mixin class $ChatEvent_MessageReceivedCopyWith<$Res> implements $ChatEv
   factory $ChatEvent_MessageReceivedCopyWith(ChatEvent_MessageReceived value, $Res Function(ChatEvent_MessageReceived) _then) = _$ChatEvent_MessageReceivedCopyWithImpl;
 @useResult
 $Res call({
- PlatformInt64 id, DeviceAddress from, Uint8List body
+ PlatformInt64 id, DeviceAddress from, Uint8List body, bool identityChanged
 });
 
 
@@ -238,12 +243,13 @@ class _$ChatEvent_MessageReceivedCopyWithImpl<$Res>
 
 /// Create a copy of ChatEvent
 /// with the given fields replaced by the non-null parameter values.
-@pragma('vm:prefer-inline') $Res call({Object? id = null,Object? from = null,Object? body = null,}) {
+@pragma('vm:prefer-inline') $Res call({Object? id = null,Object? from = null,Object? body = null,Object? identityChanged = null,}) {
   return _then(ChatEvent_MessageReceived(
 id: null == id ? _self.id : id // ignore: cast_nullable_to_non_nullable
 as PlatformInt64,from: null == from ? _self.from : from // ignore: cast_nullable_to_non_nullable
 as DeviceAddress,body: null == body ? _self.body : body // ignore: cast_nullable_to_non_nullable
-as Uint8List,
+as Uint8List,identityChanged: null == identityChanged ? _self.identityChanged : identityChanged // ignore: cast_nullable_to_non_nullable
+as bool,
   ));
 }
 

@@ -4,6 +4,7 @@
 // Cada binário de teste usa só parte disto.
 #![allow(dead_code)]
 
+use std::cell::Cell;
 use std::error::Error;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -39,6 +40,7 @@ pub fn now_millis() -> Result<u64, Box<dyn Error>> {
 /// Um aparelho registrado, com o stream de eventos assinado num canal.
 pub struct Device {
     pub address: DeviceAddress,
+    seed: u8,
     keys: AccountKeys,
     db_path: PathBuf,
     db_key: Vec<u8>,
@@ -48,6 +50,9 @@ pub struct Device {
     events: Receiver<ChatEvent>,
     /// Próxima pré-chave descartável que o servidor entregaria num fetch do bundle.
     next_pre_key: usize,
+    /// A próxima mensagem recebida deve vir com o aviso de identidade trocada
+    /// ([`Self::expect_identity_change`]); consumido ao receber.
+    expect_identity_change: Cell<bool>,
 }
 
 impl Device {
@@ -55,7 +60,11 @@ impl Device {
     /// certificado de remetente (o que o registro no servidor faria) e assina os eventos. `seed`
     /// distingue os aparelhos.
     pub fn register(dir: &Path, seed: u8) -> Result<Self, Box<dyn Error>> {
-        let db_path = dir.join(format!("{seed:02x}.db"));
+        Self::register_file(dir, seed, &format!("{seed:02x}.db"))
+    }
+
+    fn register_file(dir: &Path, seed: u8, file: &str) -> Result<Self, Box<dyn Error>> {
+        let db_path = dir.join(file);
         let db_key = vec![seed; 32];
         let core = open(&db_path, &db_key)?;
         let keys = core.generate_account_keys()?;
@@ -73,6 +82,7 @@ impl Device {
         let events = subscribe(&core);
         Ok(Self {
             address,
+            seed,
             keys,
             db_path,
             db_key,
@@ -80,7 +90,20 @@ impl Device {
             core,
             events,
             next_pre_key: 0,
+            expect_identity_change: Cell::new(false),
         })
+    }
+
+    /// O mesmo aparelho reinstalado sem backup: a mesma conta e o mesmo endereço, num banco
+    /// novo em `dir`, com identidade nova. Os contatos veem o código de segurança mudar.
+    pub fn reinstall(&self, dir: &Path) -> Result<Self, Box<dyn Error>> {
+        Self::register_file(dir, self.seed, &format!("{:02x}-reinstalado.db", self.seed))
+    }
+
+    /// A próxima mensagem recebida por [`Self::try_receive`] deve trazer `identity_changed`; sem
+    /// isto, um aviso de identidade é falha do teste.
+    pub fn expect_identity_change(&self) {
+        self.expect_identity_change.set(true);
     }
 
     /// Bundle que o serviço `keys` entregaria agora: consome uma pré-chave EC e uma Kyber
@@ -108,12 +131,13 @@ impl Device {
         })
     }
 
-    /// Abre sessão (PQXDH) com `peer` a partir de um bundle buscado dele.
-    pub fn start_session(&self, peer: &mut Device) -> TestResult {
+    /// Abre sessão (PQXDH) com `peer` a partir de um bundle buscado dele. Devolve se a
+    /// identidade dele mudou em relação à conhecida.
+    pub fn start_session(&self, peer: &mut Device) -> Result<bool, Box<dyn Error>> {
         let bundle = peer.fetch_bundle()?;
-        self.core
-            .process_prekey_bundle(peer.address.clone(), bundle)?;
-        Ok(())
+        Ok(self
+            .core
+            .process_prekey_bundle(peer.address.clone(), bundle)?)
     }
 
     /// Cifra e sela `text` para `to`.
@@ -140,14 +164,25 @@ impl Device {
                     id,
                     from: sender,
                     body,
+                    identity_changed,
                 } => {
                     if sender != from.address {
                         return Err("evento com remetente errado".into());
                     }
                     let stored = self.core.received_messages(id - 1, 1)?;
                     match stored.first() {
-                        Some(m) if m.id == id && m.from == sender && m.body == body => {}
+                        Some(m)
+                            if m.id == id
+                                && m.from == sender
+                                && m.body == body
+                                && m.identity_changed == identity_changed => {}
                         _ => return Err("mensagem do evento não ficou gravada".into()),
+                    }
+                    if identity_changed != self.expect_identity_change.replace(false) {
+                        return Err(format!(
+                            "aviso de identidade inesperado: identity_changed={identity_changed}"
+                        )
+                        .into());
                     }
                     Ok(Ok(body))
                 }
@@ -206,6 +241,7 @@ impl Device {
         let events = subscribe(&core);
         Ok(Self {
             address: self.address.clone(),
+            seed: self.seed,
             keys: self.keys.clone(),
             db_path: self.db_path.clone(),
             db_key: self.db_key.clone(),
@@ -213,6 +249,7 @@ impl Device {
             core,
             events,
             next_pre_key: self.next_pre_key,
+            expect_identity_change: Cell::new(false),
         })
     }
 

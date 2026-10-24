@@ -38,9 +38,18 @@ pub enum CoreError {
     /// Não há sessão com o dispositivo remoto: buscar o bundle e chamar `process_prekey_bundle`.
     #[error("sessão inexistente")]
     SessionNotFound,
-    /// A identidade do contato mudou e não foi aceita.
+    /// Conversa verificada cuja chave de identidade do contato mudou: o envio fica bloqueado
+    /// até o usuário conferir o código de segurança novo e verificar de novo, ou aceitar a
+    /// troca, com `set_identity_verified`.
     #[error("identidade remota não confiável")]
     UntrustedIdentity,
+    /// Nenhuma chave de identidade do contato ainda: não houve bundle nem mensagem dele, então
+    /// não há código de segurança para mostrar nem identidade para verificar.
+    #[error("identidade do contato desconhecida")]
+    UnknownIdentity,
+    /// O QR lido não é um código de segurança, ou é de uma versão incompatível.
+    #[error("código de segurança inválido")]
+    InvalidSafetyNumber,
     /// Envelope já decifrado antes.
     #[error("mensagem duplicada")]
     DuplicateMessage,
@@ -96,6 +105,8 @@ impl From<ProtocolError> for CoreError {
             ProtocolError::InvalidAddress => Self::InvalidAddress,
             ProtocolError::SessionNotFound => Self::SessionNotFound,
             ProtocolError::UntrustedIdentity => Self::UntrustedIdentity,
+            ProtocolError::UnknownIdentity => Self::UnknownIdentity,
+            ProtocolError::InvalidSafetyNumber => Self::InvalidSafetyNumber,
             ProtocolError::DuplicateMessage => Self::DuplicateMessage,
             ProtocolError::InvalidMessage => Self::InvalidMessage,
             ProtocolError::InvalidKey => Self::InvalidKey,

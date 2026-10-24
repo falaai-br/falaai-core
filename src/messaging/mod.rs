@@ -29,6 +29,8 @@ pub(crate) struct InboxMessage {
     /// Instante em que o servidor recebeu o envelope, em milissegundos desde a época Unix.
     pub(crate) server_timestamp: u64,
     pub(crate) body: Plaintext,
+    /// A chave de identidade do remetente mudou ao decifrar esta mensagem.
+    pub(crate) identity_changed: bool,
 }
 
 /// Mensagens recebidas, sobre o banco local. Clonar só copia o handle da conexão.
@@ -43,31 +45,35 @@ impl Inbox {
         Self { db }
     }
 
-    /// Grava a mensagem que `from` enviou com `client_message_id` e devolve o id dela, ou `None`
-    /// se `from` já tinha enviado uma mensagem com esse `client_message_id` (um reenvio), sem
-    /// gravar nada. Um `client_message_id` vazio não deduplica. Dentro da transação de
-    /// [`Database::begin`], só vale se ela for confirmada.
+    /// Grava a mensagem que `from` enviou com `client_message_id`, com a marca de que a
+    /// identidade dele mudou nela, e devolve o id dela, ou `None` se `from` já tinha enviado uma
+    /// mensagem com esse `client_message_id` (um reenvio), sem gravar nada. Um
+    /// `client_message_id` vazio não deduplica. Dentro da transação de [`Database::begin`], só
+    /// vale se ela for confirmada.
     pub(crate) fn record(
         &self,
         from: &Address,
         client_message_id: &[u8],
         server_timestamp: u64,
         body: &[u8],
+        identity_changed: bool,
     ) -> Result<Option<i64>, StorageError> {
         let server_timestamp = i64::try_from(server_timestamp).map_err(|_| StorageError::Sqlite)?;
         let client_message_id = (!client_message_id.is_empty()).then_some(client_message_id);
         self.db.with(|c| {
             let inserted = c.execute(
                 "INSERT INTO received_messages
-                     (sender_aci, sender_device_id, client_message_id, server_timestamp, body)
-                 VALUES (?1, ?2, ?3, ?4, ?5)
+                     (sender_aci, sender_device_id, client_message_id, server_timestamp, body,
+                      identity_changed)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)
                  ON CONFLICT (sender_aci, sender_device_id, client_message_id) DO NOTHING",
                 params![
                     from.aci(),
                     from.device_id(),
                     client_message_id,
                     server_timestamp,
-                    body
+                    body,
+                    identity_changed
                 ],
             )?;
             Ok((inserted > 0).then(|| c.last_insert_rowid()))
@@ -78,7 +84,7 @@ impl Inbox {
     pub(crate) fn after(&self, after: i64, limit: u32) -> Result<Vec<InboxMessage>, StorageError> {
         self.db.with(|c| {
             let mut select = c.prepare_cached(
-                "SELECT id, sender_aci, sender_device_id, server_timestamp, body
+                "SELECT id, sender_aci, sender_device_id, server_timestamp, body, identity_changed
                  FROM received_messages WHERE id > ?1 ORDER BY id LIMIT ?2",
             )?;
             let rows = select.query_map(params![after, limit], |row| {
@@ -91,6 +97,7 @@ impl Inbox {
                     from,
                     server_timestamp,
                     body: Plaintext::new(row.get(4)?),
+                    identity_changed: row.get(5)?,
                 })
             })?;
             rows.collect()
@@ -127,10 +134,10 @@ mod tests {
         let inbox = inbox()?;
         let from = Address::new(ACI, 3)?;
         let first = inbox
-            .record(&from, &[], 1_000, b"um")?
+            .record(&from, &[], 1_000, b"um", false)?
             .ok_or("não gravou")?;
         let second = inbox
-            .record(&from, &[], 900, b"dois")?
+            .record(&from, &[], 900, b"dois", true)?
             .ok_or("não gravou")?;
         assert!(second > first);
 
@@ -140,6 +147,8 @@ mod tests {
         assert_eq!(message.id, first);
         assert_eq!(message.from, from);
         assert_eq!(message.server_timestamp, 1_000);
+        assert!(!message.identity_changed);
+        assert!(all.get(1).ok_or("sem a segunda")?.identity_changed);
 
         assert_eq!(texts(&inbox.after(first, 10)?), [&b"dois"[..]]);
         assert!(inbox.after(second, 10)?.is_empty());
@@ -151,7 +160,7 @@ mod tests {
         let inbox = inbox()?;
         let from = Address::new(ACI, 1)?;
         for body in [b"a", b"b", b"c"] {
-            inbox.record(&from, &[], 1, body)?;
+            inbox.record(&from, &[], 1, body, false)?;
         }
         let page = inbox.after(0, 2)?;
         assert_eq!(texts(&page), [&b"a"[..], b"b"]);
@@ -167,12 +176,15 @@ mod tests {
         let from = Address::new(ACI, 1)?;
         inbox.db.begin()?;
         let undone = inbox
-            .record(&from, &[], 1, b"desfeita")?
+            .record(&from, &[], 1, b"desfeita", false)?
             .ok_or("não gravou")?;
         inbox.db.rollback()?;
         assert!(inbox.after(0, 10)?.is_empty());
         // O id desfeito volta a ser usado: a mensagem reentregue fica com o mesmo cursor.
-        assert_eq!(inbox.record(&from, &[], 1, b"reentregue")?, Some(undone));
+        assert_eq!(
+            inbox.record(&from, &[], 1, b"reentregue", false)?,
+            Some(undone)
+        );
         Ok(())
     }
 
@@ -181,12 +193,17 @@ mod tests {
         let inbox = inbox()?;
         let from = Address::new(ACI, 1)?;
         let deleted = inbox
-            .record(&from, &[], 1, b"efemera")?
+            .record(&from, &[], 1, b"efemera", false)?
             .ok_or("não gravou")?;
         inbox
             .db
             .with(|c| c.execute("DELETE FROM received_messages", []))?;
-        assert!(inbox.record(&from, &[], 1, b"nova")?.ok_or("não gravou")? > deleted);
+        assert!(
+            inbox
+                .record(&from, &[], 1, b"nova", false)?
+                .ok_or("não gravou")?
+                > deleted
+        );
         Ok(())
     }
 
@@ -195,8 +212,8 @@ mod tests {
         let inbox = inbox()?;
         let from = Address::new(ACI, 1)?;
         let id = [7; 16];
-        assert!(inbox.record(&from, &id, 1, b"oi")?.is_some());
-        assert_eq!(inbox.record(&from, &id, 2, b"oi")?, None);
+        assert!(inbox.record(&from, &id, 1, b"oi", false)?.is_some());
+        assert_eq!(inbox.record(&from, &id, 2, b"oi", false)?, None);
         assert_eq!(texts(&inbox.after(0, 10)?), [&b"oi"[..]]);
         Ok(())
     }
@@ -209,10 +226,10 @@ mod tests {
         let other_device = Address::new(ACI, 2)?;
         let other_account = Address::new("0f0e0d0c-0000-4000-8000-000000000000", 1)?;
         for sender in [&from, &other_device, &other_account] {
-            assert!(inbox.record(sender, &id, 1, b"oi")?.is_some());
+            assert!(inbox.record(sender, &id, 1, b"oi", false)?.is_some());
         }
-        assert!(inbox.record(&from, &[], 1, b"sem id")?.is_some());
-        assert!(inbox.record(&from, &[], 1, b"sem id")?.is_some());
+        assert!(inbox.record(&from, &[], 1, b"sem id", false)?.is_some());
+        assert!(inbox.record(&from, &[], 1, b"sem id", false)?.is_some());
         assert_eq!(inbox.after(0, 10)?.len(), 5);
         Ok(())
     }
@@ -222,7 +239,7 @@ mod tests {
         let inbox = inbox()?;
         let from = Address::new(ACI, 1)?;
         assert_eq!(
-            inbox.record(&from, &[], u64::MAX, b"oi"),
+            inbox.record(&from, &[], u64::MAX, b"oi", false),
             Err(StorageError::Sqlite)
         );
         Ok(())

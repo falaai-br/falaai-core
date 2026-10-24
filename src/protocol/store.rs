@@ -5,6 +5,7 @@
 //! escopo.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use async_trait::async_trait;
 use libsignal_protocol::{
@@ -26,19 +27,134 @@ use crate::storage::{Database, StorageError};
 type SignalResult<T> = Result<T, SignalProtocolError>;
 
 /// Implementa todos os stores da libsignal sobre uma conexão compartilhada. Clonar só copia o
-/// handle da conexão.
+/// handle da conexão (e a marca de identidade trocada, compartilhada entre os clones).
 ///
-/// Identidades remotas seguem TOFU, como a implementação de referência da libsignal: a primeira
-/// vista é confiável; uma diferente da guardada não é, nos dois sentidos, até ser salva.
+/// Identidades remotas seguem TOFU com safety numbers, como os apps do Signal: a primeira
+/// chave vista é guardada e uma diferente a substitui ao chegar, deixando a troca marcada
+/// ([`identity_changed`](Self::identity_changed)) para virar aviso na conversa. Receber nunca
+/// é bloqueado. Enviar exige a chave guardada (uma sessão com a chave antiga não serve) e, em
+/// conversa verificada, que ela seja a verificada: fora disso
+/// [`IdentityKeyStore::is_trusted_identity`] recusa e a libsignal falha com
+/// `UntrustedIdentity`, até o usuário verificar a nova ou aceitar a troca
+/// ([`Self::set_identity_verified`]).
 #[derive(Clone)]
 pub(crate) struct SqliteStore {
     db: Arc<Database>,
+    /// Ligada por [`IdentityKeyStore::save_identity`] ao trocar a chave guardada de um contato;
+    /// [`SignalStores::begin`] desliga. Compartilhada pelos clones de [`SqliteStores`].
+    identity_changed: Arc<AtomicBool>,
 }
 
 impl SqliteStore {
     /// Stores sobre `db`.
     pub(crate) fn new(db: Arc<Database>) -> Self {
-        Self { db }
+        Self {
+            db,
+            identity_changed: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    /// `true` se [`IdentityKeyStore::save_identity`] trocou a chave guardada de um contato por
+    /// outra desde a última transação aberta por [`SignalStores::begin`].
+    pub(crate) fn identity_changed(&self) -> bool {
+        self.identity_changed.load(Ordering::Acquire)
+    }
+
+    /// Chave pública de identidade deste dispositivo. Exige as chaves da conta
+    /// ([`ProtocolError::NoAccount`]).
+    pub(crate) fn local_identity_key(&self) -> Result<IdentityKey, ProtocolError> {
+        let key_pair = self
+            .query_blob(
+                "local_identity_key",
+                "SELECT key_pair FROM local_identity",
+                [],
+            )
+            .map_err(|_| ProtocolError::Storage)?
+            .ok_or(ProtocolError::NoAccount)?;
+        Ok(*IdentityKeyPair::try_from(&key_pair[..])?.identity_key())
+    }
+
+    /// Chave de identidade guardada para a conta de `peer`: a última vista num bundle ou numa
+    /// mensagem dele. `None` enquanto não houve nenhum dos dois.
+    pub(crate) fn peer_identity(
+        &self,
+        peer: &Address,
+    ) -> Result<Option<IdentityKey>, ProtocolError> {
+        self.query_blob(
+            "peer_identity",
+            "SELECT identity_key FROM identities WHERE name = ?1",
+            [peer.aci()],
+        )
+        .map_err(|_| ProtocolError::Storage)?
+        .map(|key| IdentityKey::decode(&key).map_err(ProtocolError::from))
+        .transpose()
+    }
+
+    /// Chave que o usuário verificou para a conta de `peer`, se verificou alguma.
+    fn verified_identity(&self, name: &str) -> Result<Option<IdentityKey>, ProtocolError> {
+        self.query_blob(
+            "verified_identity",
+            "SELECT identity_key FROM verified_identities WHERE name = ?1",
+            [name],
+        )
+        .map_err(|_| ProtocolError::Storage)?
+        .map(|key| IdentityKey::decode(&key).map_err(ProtocolError::from))
+        .transpose()
+    }
+
+    /// Situação da identidade da conta de `peer` frente ao que o usuário verificou.
+    pub(crate) fn identity_status(
+        &self,
+        peer: &Address,
+    ) -> Result<PeerIdentityStatus, ProtocolError> {
+        Ok(
+            match (
+                self.peer_identity(peer)?,
+                self.verified_identity(peer.aci())?,
+            ) {
+                (None, _) => PeerIdentityStatus::Unknown,
+                (Some(_), None) => PeerIdentityStatus::Default,
+                (Some(current), Some(verified)) if current == verified => {
+                    PeerIdentityStatus::Verified
+                }
+                (Some(_), Some(_)) => PeerIdentityStatus::Changed,
+            },
+        )
+    }
+
+    /// Marca a chave atual da conta de `peer` como verificada pelo usuário (`true`), ou desfaz a
+    /// verificação (`false`), o que também aceita uma troca de chave e libera o envio. Verificar
+    /// exige uma chave guardada ([`ProtocolError::UnknownIdentity`]).
+    pub(crate) fn set_identity_verified(
+        &self,
+        peer: &Address,
+        verified: bool,
+    ) -> Result<(), ProtocolError> {
+        let name = peer.aci();
+        if !verified {
+            self.db
+                .with(|c| c.execute("DELETE FROM verified_identities WHERE name = ?1", [name]))
+                .map_err(|_| ProtocolError::Storage)?;
+            return Ok(());
+        }
+        let pinned = self
+            .db
+            .with(|c| {
+                let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+                let pinned = tx.execute(
+                    "INSERT INTO verified_identities (name, identity_key)
+                     SELECT name, identity_key FROM identities WHERE name = ?1
+                     ON CONFLICT (name) DO UPDATE SET identity_key = excluded.identity_key",
+                    [name],
+                )?;
+                tx.commit()?;
+                Ok(pinned)
+            })
+            .map_err(|_| ProtocolError::Storage)?;
+        if pinned == 0 {
+            return Err(ProtocolError::UnknownIdentity);
+        }
+        Ok(())
     }
 
     /// Grava identidade local e pré-chaves geradas no registro, numa transação. Falha com
@@ -292,6 +408,20 @@ pub(crate) struct AccountRecords<'a> {
     pub(crate) kyber_last_resort: &'a KyberPreKeyRecord,
 }
 
+/// Situação da identidade de um contato frente ao que o usuário verificou.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PeerIdentityStatus {
+    /// Nenhuma chave guardada: ainda não houve bundle nem mensagem dele.
+    Unknown,
+    /// Chave guardada na primeira vista (TOFU), sem verificação do usuário.
+    Default,
+    /// A chave guardada é a que o usuário verificou.
+    Verified,
+    /// O usuário verificou uma chave e a guardada agora é outra: o envio está bloqueado até ele
+    /// verificar a nova ou aceitar a troca.
+    Changed,
+}
+
 fn has_local_identity(c: &rusqlite::Connection) -> rusqlite::Result<bool> {
     c.query_row("SELECT EXISTS (SELECT 1 FROM local_identity)", [], |row| {
         row.get(0)
@@ -340,19 +470,33 @@ impl IdentityKeyStore for SqliteStore {
              ON CONFLICT (name) DO UPDATE SET identity_key = excluded.identity_key",
             params![address.name(), &identity.serialize()[..]],
         )?;
+        if previous.is_some() {
+            self.identity_changed.store(true, Ordering::Release);
+        }
         Ok(IdentityChange::from_changed(previous.is_some()))
     }
 
+    /// Receber é sempre confiável: a chave nova substitui a guardada e a troca vira aviso.
+    /// Enviar é confiável se a chave é a guardada (ou ainda não há nenhuma) e, havendo uma
+    /// verificada, se é ela. Como no Signal, a sessão com a chave antiga não envia depois que
+    /// uma nova foi guardada.
     async fn is_trusted_identity(
         &self,
         address: &ProtocolAddress,
         identity: &IdentityKey,
-        _direction: Direction,
+        direction: Direction,
     ) -> SignalResult<bool> {
-        Ok(self
-            .get_identity(address)
-            .await?
-            .is_none_or(|known| known == *identity))
+        match direction {
+            Direction::Receiving => Ok(true),
+            Direction::Sending => {
+                let stored = self.get_identity(address).await?;
+                let verified = self.verified_identity(address.name()).map_err(
+                    SignalProtocolError::for_application_callback("is_trusted_identity"),
+                )?;
+                Ok(stored.is_none_or(|stored| stored == *identity)
+                    && verified.is_none_or(|verified| verified == *identity))
+            }
+        }
     }
 
     async fn get_identity(&self, address: &ProtocolAddress) -> SignalResult<Option<IdentityKey>> {
@@ -624,7 +768,11 @@ impl SignalStores for SqliteStores {
     }
 
     fn begin(&mut self) -> Result<(), ProtocolError> {
-        self.db.begin().map_err(transaction_error)
+        self.db.begin().map_err(transaction_error)?;
+        self.identities
+            .identity_changed
+            .store(false, Ordering::Release);
+        Ok(())
     }
 
     fn commit(&mut self) -> Result<(), ProtocolError> {
@@ -634,6 +782,10 @@ impl SignalStores for SqliteStores {
     fn rollback(&mut self) {
         // Só falha se a conexão já desfez a transação sozinha.
         let _ = self.db.rollback();
+    }
+
+    fn identity_changed(&self) -> bool {
+        self.identities.identity_changed()
     }
 }
 
@@ -729,49 +881,149 @@ mod tests {
         Ok(())
     }
 
+    fn identity_key() -> IdentityKey {
+        *IdentityKeyPair::generate(&mut rand::rng()).identity_key()
+    }
+
+    /// Confiança nos dois sentidos para `identity` como chave de `address`.
+    fn trusted(
+        store: &SqliteStore,
+        address: &ProtocolAddress,
+        identity: &IdentityKey,
+    ) -> Result<(bool, bool), Box<dyn Error>> {
+        Ok((
+            ready(store.is_trusted_identity(address, identity, Direction::Sending))??,
+            ready(store.is_trusted_identity(address, identity, Direction::Receiving))??,
+        ))
+    }
+
     #[test]
-    fn identidade_remota_segue_tofu() -> TestResult {
+    fn identidade_remota_nao_verificada_segue_tofu_e_aceita_a_troca() -> TestResult {
         let mut store = store()?;
         let bob = address(0xB0, 1)?;
-        let first = *IdentityKeyPair::generate(&mut rand::rng()).identity_key();
-        let second = *IdentityKeyPair::generate(&mut rand::rng()).identity_key();
+        let (first, second) = (identity_key(), identity_key());
+        let bob_account = Address::new(bob.name(), 1)?;
 
         assert_eq!(ready(store.get_identity(&bob))??, None);
-        assert!(ready(store.is_trusted_identity(
-            &bob,
-            &first,
-            Direction::Sending
-        ))??);
+        assert_eq!(
+            store.identity_status(&bob_account)?,
+            PeerIdentityStatus::Unknown
+        );
+        assert_eq!(trusted(&store, &bob, &first)?, (true, true));
 
         assert_eq!(
             ready(store.save_identity(&bob, &first))??,
             IdentityChange::NewOrUnchanged
         );
+        assert!(!store.identity_changed());
         assert_eq!(
             ready(store.save_identity(&bob, &first))??,
             IdentityChange::NewOrUnchanged
         );
-        for direction in [Direction::Sending, Direction::Receiving] {
-            assert!(ready(store.is_trusted_identity(
-                &bob,
-                &first,
-                direction.clone()
-            ))??);
-            assert!(!ready(
-                store.is_trusted_identity(&bob, &second, direction)
-            )??);
-        }
-
+        assert!(!store.identity_changed());
+        assert_eq!(
+            store.identity_status(&bob_account)?,
+            PeerIdentityStatus::Default
+        );
+        assert_eq!(trusted(&store, &bob, &first)?, (true, true));
+        // Sem verificação, a chave nova é aceita ao chegar e a troca fica marcada; enviar só
+        // com a chave guardada.
+        assert_eq!(trusted(&store, &bob, &second)?, (false, true));
         assert_eq!(
             ready(store.save_identity(&bob, &second))??,
             IdentityChange::ReplacedExisting
         );
+        assert!(store.identity_changed());
         assert_eq!(ready(store.get_identity(&bob))??, Some(second));
-        assert!(ready(store.is_trusted_identity(
-            &bob,
-            &second,
-            Direction::Sending
-        ))??);
+        assert_eq!(store.peer_identity(&bob_account)?, Some(second));
+        assert_eq!(trusted(&store, &bob, &second)?, (true, true));
+        assert_eq!(trusted(&store, &bob, &first)?, (false, true));
+        assert_eq!(
+            store.identity_status(&bob_account)?,
+            PeerIdentityStatus::Default
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn identidade_verificada_bloqueia_envio_quando_muda_e_nunca_bloqueia_receber() -> TestResult {
+        let mut store = store()?;
+        let bob = address(0xB0, 1)?;
+        let bob_account = Address::new(bob.name(), 1)?;
+        let (first, second) = (identity_key(), identity_key());
+
+        assert_eq!(
+            store.set_identity_verified(&bob_account, true),
+            Err(ProtocolError::UnknownIdentity)
+        );
+        ready(store.save_identity(&bob, &first))??;
+        store.set_identity_verified(&bob_account, true)?;
+        assert_eq!(
+            store.identity_status(&bob_account)?,
+            PeerIdentityStatus::Verified
+        );
+        assert_eq!(trusted(&store, &bob, &first)?, (true, true));
+        assert_eq!(trusted(&store, &bob, &second)?, (false, true));
+
+        // A chave nova chega numa mensagem: é guardada, a verificada fica pinada na antiga.
+        assert_eq!(
+            ready(store.save_identity(&bob, &second))??,
+            IdentityChange::ReplacedExisting
+        );
+        assert_eq!(
+            store.identity_status(&bob_account)?,
+            PeerIdentityStatus::Changed
+        );
+        // Nem a nova (não é a verificada) nem a antiga (não é a guardada) enviam.
+        assert_eq!(trusted(&store, &bob, &second)?, (false, true));
+        assert_eq!(trusted(&store, &bob, &first)?, (false, true));
+
+        // Verificar de novo pina a chave atual e libera; desfazer a verificação também.
+        store.set_identity_verified(&bob_account, true)?;
+        assert_eq!(
+            store.identity_status(&bob_account)?,
+            PeerIdentityStatus::Verified
+        );
+        assert_eq!(trusted(&store, &bob, &second)?, (true, true));
+        assert_eq!(trusted(&store, &bob, &first)?, (false, true));
+        store.set_identity_verified(&bob_account, false)?;
+        assert_eq!(
+            store.identity_status(&bob_account)?,
+            PeerIdentityStatus::Default
+        );
+        assert_eq!(trusted(&store, &bob, &second)?, (true, true));
+        assert_eq!(trusted(&store, &bob, &first)?, (false, true));
+        store.set_identity_verified(&bob_account, false)?;
+        Ok(())
+    }
+
+    #[test]
+    fn verificacao_e_por_conta_e_nao_vaza_para_outro_contato() -> TestResult {
+        let mut store = store()?;
+        let bob = address(0xB0, 1)?;
+        let carol = address(0xC0, 1)?;
+        let key = identity_key();
+        ready(store.save_identity(&bob, &key))??;
+        ready(store.save_identity(&carol, &key))??;
+        store.set_identity_verified(&Address::new(bob.name(), 1)?, true)?;
+        assert_eq!(
+            store.identity_status(&Address::new(bob.name(), 2)?)?,
+            PeerIdentityStatus::Verified
+        );
+        assert_eq!(
+            store.identity_status(&Address::new(carol.name(), 1)?)?,
+            PeerIdentityStatus::Default
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn chave_de_identidade_local_exige_conta() -> TestResult {
+        let store = store()?;
+        assert_eq!(store.local_identity_key(), Err(ProtocolError::NoAccount));
+        let identity = IdentityKeyPair::generate(&mut rand::rng());
+        store.create_local_identity(&identity, 42)?;
+        assert_eq!(store.local_identity_key()?, *identity.identity_key());
         Ok(())
     }
 

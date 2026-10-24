@@ -40,7 +40,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.13.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 94120224;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -180245800;
 
 // Section: executor
 
@@ -465,6 +465,57 @@ fn wire__crate__api__FalaaiCore_generate_account_keys_impl(
         },
     )
 }
+fn wire__crate__api__FalaaiCore_identity_status_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "FalaaiCore_identity_status",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_that = <RustOpaqueMoi<
+                flutter_rust_bridge::for_generated::RustAutoOpaqueInner<FalaaiCore>,
+            >>::sse_decode(&mut deserializer);
+            let api_peer = <crate::api::types::DeviceAddress>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, crate::api::error::CoreError>((move || {
+                    let mut api_that_guard = None;
+                    let decode_indices_ =
+                        flutter_rust_bridge::for_generated::lockable_compute_decode_order(vec![
+                            flutter_rust_bridge::for_generated::LockableOrderInfo::new(
+                                &api_that, 0, false,
+                            ),
+                        ]);
+                    for i in decode_indices_ {
+                        match i {
+                            0 => api_that_guard = Some(api_that.lockable_decode_sync_ref()),
+                            _ => unreachable!(),
+                        }
+                    }
+                    let api_that_guard = api_that_guard.unwrap();
+                    let output_ok =
+                        crate::api::FalaaiCore::identity_status(&*api_that_guard, api_peer)?;
+                    std::result::Result::Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
 fn wire__crate__api__FalaaiCore_open_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
@@ -611,6 +662,112 @@ fn wire__crate__api__FalaaiCore_received_messages_impl(
         },
     )
 }
+fn wire__crate__api__FalaaiCore_safety_number_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "FalaaiCore_safety_number",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_that = <RustOpaqueMoi<
+                flutter_rust_bridge::for_generated::RustAutoOpaqueInner<FalaaiCore>,
+            >>::sse_decode(&mut deserializer);
+            let api_peer = <crate::api::types::DeviceAddress>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, crate::api::error::CoreError>((move || {
+                    let mut api_that_guard = None;
+                    let decode_indices_ =
+                        flutter_rust_bridge::for_generated::lockable_compute_decode_order(vec![
+                            flutter_rust_bridge::for_generated::LockableOrderInfo::new(
+                                &api_that, 0, false,
+                            ),
+                        ]);
+                    for i in decode_indices_ {
+                        match i {
+                            0 => api_that_guard = Some(api_that.lockable_decode_sync_ref()),
+                            _ => unreachable!(),
+                        }
+                    }
+                    let api_that_guard = api_that_guard.unwrap();
+                    let output_ok =
+                        crate::api::FalaaiCore::safety_number(&*api_that_guard, api_peer)?;
+                    std::result::Result::Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
+fn wire__crate__api__FalaaiCore_safety_number_matches_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "FalaaiCore_safety_number_matches",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_that = <RustOpaqueMoi<
+                flutter_rust_bridge::for_generated::RustAutoOpaqueInner<FalaaiCore>,
+            >>::sse_decode(&mut deserializer);
+            let api_peer = <crate::api::types::DeviceAddress>::sse_decode(&mut deserializer);
+            let api_scanned_qr = <Vec<u8>>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, crate::api::error::CoreError>((move || {
+                    let mut api_that_guard = None;
+                    let decode_indices_ =
+                        flutter_rust_bridge::for_generated::lockable_compute_decode_order(vec![
+                            flutter_rust_bridge::for_generated::LockableOrderInfo::new(
+                                &api_that, 0, false,
+                            ),
+                        ]);
+                    for i in decode_indices_ {
+                        match i {
+                            0 => api_that_guard = Some(api_that.lockable_decode_sync_ref()),
+                            _ => unreachable!(),
+                        }
+                    }
+                    let api_that_guard = api_that_guard.unwrap();
+                    let output_ok = crate::api::FalaaiCore::safety_number_matches(
+                        &*api_that_guard,
+                        api_peer,
+                        api_scanned_qr,
+                    )?;
+                    std::result::Result::Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
 fn wire__crate__api__FalaaiCore_send_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
@@ -714,6 +871,61 @@ fn wire__crate__api__FalaaiCore_send_message_impl(
                     let api_that_guard = api_that_guard.unwrap();
                     let output_ok =
                         crate::api::FalaaiCore::send_message(&*api_that_guard, api_peer, api_body)?;
+                    std::result::Result::Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
+fn wire__crate__api__FalaaiCore_set_identity_verified_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "FalaaiCore_set_identity_verified",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_that = <RustOpaqueMoi<
+                flutter_rust_bridge::for_generated::RustAutoOpaqueInner<FalaaiCore>,
+            >>::sse_decode(&mut deserializer);
+            let api_peer = <crate::api::types::DeviceAddress>::sse_decode(&mut deserializer);
+            let api_verified = <bool>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, crate::api::error::CoreError>((move || {
+                    let mut api_that_guard = None;
+                    let decode_indices_ =
+                        flutter_rust_bridge::for_generated::lockable_compute_decode_order(vec![
+                            flutter_rust_bridge::for_generated::LockableOrderInfo::new(
+                                &api_that, 0, false,
+                            ),
+                        ]);
+                    for i in decode_indices_ {
+                        match i {
+                            0 => api_that_guard = Some(api_that.lockable_decode_sync_ref()),
+                            _ => unreachable!(),
+                        }
+                    }
+                    let api_that_guard = api_that_guard.unwrap();
+                    let output_ok = crate::api::FalaaiCore::set_identity_verified(
+                        &*api_that_guard,
+                        api_peer,
+                        api_verified,
+                    )?;
                     std::result::Result::Ok(output_ok)
                 })())
             }
@@ -948,10 +1160,12 @@ impl SseDecode for crate::api::types::ChatEvent {
                 let mut var_id = <i64>::sse_decode(deserializer);
                 let mut var_from = <crate::api::types::DeviceAddress>::sse_decode(deserializer);
                 let mut var_body = <Vec<u8>>::sse_decode(deserializer);
+                let mut var_identityChanged = <bool>::sse_decode(deserializer);
                 return crate::api::types::ChatEvent::MessageReceived {
                     id: var_id,
                     from: var_from,
                     body: var_body,
+                    identity_changed: var_identityChanged,
                 };
             }
             1 => {
@@ -991,20 +1205,22 @@ impl SseDecode for crate::api::error::CoreError {
             8 => crate::api::error::CoreError::InvalidKey,
             9 => crate::api::error::CoreError::SessionNotFound,
             10 => crate::api::error::CoreError::UntrustedIdentity,
-            11 => crate::api::error::CoreError::DuplicateMessage,
-            12 => crate::api::error::CoreError::InvalidMessage,
-            13 => crate::api::error::CoreError::NoSenderCertificate,
-            14 => crate::api::error::CoreError::InvalidSenderCertificate,
-            15 => crate::api::error::CoreError::NoEventListener,
-            16 => crate::api::error::CoreError::InvalidServerConfig,
-            17 => crate::api::error::CoreError::Network,
-            18 => crate::api::error::CoreError::NotConnected,
-            19 => crate::api::error::CoreError::Unauthorized,
-            20 => crate::api::error::CoreError::InvalidServerResponse,
-            21 => crate::api::error::CoreError::InvalidEnvelope,
-            22 => crate::api::error::CoreError::UnknownDestination,
-            23 => crate::api::error::CoreError::RateLimited,
-            24 => crate::api::error::CoreError::Internal,
+            11 => crate::api::error::CoreError::UnknownIdentity,
+            12 => crate::api::error::CoreError::InvalidSafetyNumber,
+            13 => crate::api::error::CoreError::DuplicateMessage,
+            14 => crate::api::error::CoreError::InvalidMessage,
+            15 => crate::api::error::CoreError::NoSenderCertificate,
+            16 => crate::api::error::CoreError::InvalidSenderCertificate,
+            17 => crate::api::error::CoreError::NoEventListener,
+            18 => crate::api::error::CoreError::InvalidServerConfig,
+            19 => crate::api::error::CoreError::Network,
+            20 => crate::api::error::CoreError::NotConnected,
+            21 => crate::api::error::CoreError::Unauthorized,
+            22 => crate::api::error::CoreError::InvalidServerResponse,
+            23 => crate::api::error::CoreError::InvalidEnvelope,
+            24 => crate::api::error::CoreError::UnknownDestination,
+            25 => crate::api::error::CoreError::RateLimited,
+            26 => crate::api::error::CoreError::Internal,
             _ => unreachable!("Invalid variant for CoreError: {}", inner),
         };
     }
@@ -1041,6 +1257,20 @@ impl SseDecode for i64 {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         deserializer.cursor.read_i64::<NativeEndian>().unwrap()
+    }
+}
+
+impl SseDecode for crate::api::types::IdentityStatus {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut inner = <i32>::sse_decode(deserializer);
+        return match inner {
+            0 => crate::api::types::IdentityStatus::Unknown,
+            1 => crate::api::types::IdentityStatus::Default,
+            2 => crate::api::types::IdentityStatus::Verified,
+            3 => crate::api::types::IdentityStatus::Changed,
+            _ => unreachable!("Invalid variant for IdentityStatus: {}", inner),
+        };
     }
 }
 
@@ -1154,11 +1384,25 @@ impl SseDecode for crate::api::types::ReceivedMessage {
         let mut var_from = <crate::api::types::DeviceAddress>::sse_decode(deserializer);
         let mut var_serverTimestamp = <u64>::sse_decode(deserializer);
         let mut var_body = <Vec<u8>>::sse_decode(deserializer);
+        let mut var_identityChanged = <bool>::sse_decode(deserializer);
         return crate::api::types::ReceivedMessage {
             id: var_id,
             from: var_from,
             server_timestamp: var_serverTimestamp,
             body: var_body,
+            identity_changed: var_identityChanged,
+        };
+    }
+}
+
+impl SseDecode for crate::api::types::SafetyNumber {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_digits = <String>::sse_decode(deserializer);
+        let mut var_qr = <Vec<u8>>::sse_decode(deserializer);
+        return crate::api::types::SafetyNumber {
+            digits: var_digits,
+            qr: var_qr,
         };
     }
 }
@@ -1256,28 +1500,42 @@ fn pde_ffi_dispatcher_primary_impl(
             rust_vec_len,
             data_len,
         ),
-        9 => wire__crate__api__FalaaiCore_open_impl(port, ptr, rust_vec_len, data_len),
-        10 => wire__crate__api__FalaaiCore_process_prekey_bundle_impl(
+        9 => wire__crate__api__FalaaiCore_identity_status_impl(port, ptr, rust_vec_len, data_len),
+        10 => wire__crate__api__FalaaiCore_open_impl(port, ptr, rust_vec_len, data_len),
+        11 => wire__crate__api__FalaaiCore_process_prekey_bundle_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        11 => {
+        12 => {
             wire__crate__api__FalaaiCore_received_messages_impl(port, ptr, rust_vec_len, data_len)
         }
-        12 => wire__crate__api__FalaaiCore_send_impl(port, ptr, rust_vec_len, data_len),
-        13 => wire__crate__api__FalaaiCore_send_message_impl(port, ptr, rust_vec_len, data_len),
-        14 => {
-            wire__crate__api__FalaaiCore_set_local_address_impl(port, ptr, rust_vec_len, data_len)
-        }
-        15 => wire__crate__api__FalaaiCore_set_sender_certificate_impl(
+        13 => wire__crate__api__FalaaiCore_safety_number_impl(port, ptr, rust_vec_len, data_len),
+        14 => wire__crate__api__FalaaiCore_safety_number_matches_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        16 => wire__crate__api__generate_db_key_impl(port, ptr, rust_vec_len, data_len),
+        15 => wire__crate__api__FalaaiCore_send_impl(port, ptr, rust_vec_len, data_len),
+        16 => wire__crate__api__FalaaiCore_send_message_impl(port, ptr, rust_vec_len, data_len),
+        17 => wire__crate__api__FalaaiCore_set_identity_verified_impl(
+            port,
+            ptr,
+            rust_vec_len,
+            data_len,
+        ),
+        18 => {
+            wire__crate__api__FalaaiCore_set_local_address_impl(port, ptr, rust_vec_len, data_len)
+        }
+        19 => wire__crate__api__FalaaiCore_set_sender_certificate_impl(
+            port,
+            ptr,
+            rust_vec_len,
+            data_len,
+        ),
+        20 => wire__crate__api__generate_db_key_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -1340,11 +1598,17 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::types::AccountKeys>
 impl flutter_rust_bridge::IntoDart for crate::api::types::ChatEvent {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         match self {
-            crate::api::types::ChatEvent::MessageReceived { id, from, body } => [
+            crate::api::types::ChatEvent::MessageReceived {
+                id,
+                from,
+                body,
+                identity_changed,
+            } => [
                 0.into_dart(),
                 id.into_into_dart().into_dart(),
                 from.into_into_dart().into_dart(),
                 body.into_into_dart().into_dart(),
+                identity_changed.into_into_dart().into_dart(),
             ]
             .into_dart(),
             crate::api::types::ChatEvent::MessageSent { client_message_id } => [
@@ -1390,20 +1654,22 @@ impl flutter_rust_bridge::IntoDart for crate::api::error::CoreError {
             Self::InvalidKey => 8.into_dart(),
             Self::SessionNotFound => 9.into_dart(),
             Self::UntrustedIdentity => 10.into_dart(),
-            Self::DuplicateMessage => 11.into_dart(),
-            Self::InvalidMessage => 12.into_dart(),
-            Self::NoSenderCertificate => 13.into_dart(),
-            Self::InvalidSenderCertificate => 14.into_dart(),
-            Self::NoEventListener => 15.into_dart(),
-            Self::InvalidServerConfig => 16.into_dart(),
-            Self::Network => 17.into_dart(),
-            Self::NotConnected => 18.into_dart(),
-            Self::Unauthorized => 19.into_dart(),
-            Self::InvalidServerResponse => 20.into_dart(),
-            Self::InvalidEnvelope => 21.into_dart(),
-            Self::UnknownDestination => 22.into_dart(),
-            Self::RateLimited => 23.into_dart(),
-            Self::Internal => 24.into_dart(),
+            Self::UnknownIdentity => 11.into_dart(),
+            Self::InvalidSafetyNumber => 12.into_dart(),
+            Self::DuplicateMessage => 13.into_dart(),
+            Self::InvalidMessage => 14.into_dart(),
+            Self::NoSenderCertificate => 15.into_dart(),
+            Self::InvalidSenderCertificate => 16.into_dart(),
+            Self::NoEventListener => 17.into_dart(),
+            Self::InvalidServerConfig => 18.into_dart(),
+            Self::Network => 19.into_dart(),
+            Self::NotConnected => 20.into_dart(),
+            Self::Unauthorized => 21.into_dart(),
+            Self::InvalidServerResponse => 22.into_dart(),
+            Self::InvalidEnvelope => 23.into_dart(),
+            Self::UnknownDestination => 24.into_dart(),
+            Self::RateLimited => 25.into_dart(),
+            Self::Internal => 26.into_dart(),
             _ => unreachable!(),
         }
     }
@@ -1448,6 +1714,29 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::types::Envelope>
     for crate::api::types::Envelope
 {
     fn into_into_dart(self) -> crate::api::types::Envelope {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::types::IdentityStatus {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        match self {
+            Self::Unknown => 0.into_dart(),
+            Self::Default => 1.into_dart(),
+            Self::Verified => 2.into_dart(),
+            Self::Changed => 3.into_dart(),
+            _ => unreachable!(),
+        }
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::types::IdentityStatus
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::types::IdentityStatus>
+    for crate::api::types::IdentityStatus
+{
+    fn into_into_dart(self) -> crate::api::types::IdentityStatus {
         self
     }
 }
@@ -1499,6 +1788,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::types::ReceivedMessage {
             self.from.into_into_dart().into_dart(),
             self.server_timestamp.into_into_dart().into_dart(),
             self.body.into_into_dart().into_dart(),
+            self.identity_changed.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -1511,6 +1801,27 @@ impl flutter_rust_bridge::IntoIntoDart<crate::api::types::ReceivedMessage>
     for crate::api::types::ReceivedMessage
 {
     fn into_into_dart(self) -> crate::api::types::ReceivedMessage {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::types::SafetyNumber {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.digits.into_into_dart().into_dart(),
+            self.qr.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::types::SafetyNumber
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::types::SafetyNumber>
+    for crate::api::types::SafetyNumber
+{
+    fn into_into_dart(self) -> crate::api::types::SafetyNumber {
         self
     }
 }
@@ -1623,11 +1934,17 @@ impl SseEncode for crate::api::types::ChatEvent {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         match self {
-            crate::api::types::ChatEvent::MessageReceived { id, from, body } => {
+            crate::api::types::ChatEvent::MessageReceived {
+                id,
+                from,
+                body,
+                identity_changed,
+            } => {
                 <i32>::sse_encode(0, serializer);
                 <i64>::sse_encode(id, serializer);
                 <crate::api::types::DeviceAddress>::sse_encode(from, serializer);
                 <Vec<u8>>::sse_encode(body, serializer);
+                <bool>::sse_encode(identity_changed, serializer);
             }
             crate::api::types::ChatEvent::MessageSent { client_message_id } => {
                 <i32>::sse_encode(1, serializer);
@@ -1664,20 +1981,22 @@ impl SseEncode for crate::api::error::CoreError {
                 crate::api::error::CoreError::InvalidKey => 8,
                 crate::api::error::CoreError::SessionNotFound => 9,
                 crate::api::error::CoreError::UntrustedIdentity => 10,
-                crate::api::error::CoreError::DuplicateMessage => 11,
-                crate::api::error::CoreError::InvalidMessage => 12,
-                crate::api::error::CoreError::NoSenderCertificate => 13,
-                crate::api::error::CoreError::InvalidSenderCertificate => 14,
-                crate::api::error::CoreError::NoEventListener => 15,
-                crate::api::error::CoreError::InvalidServerConfig => 16,
-                crate::api::error::CoreError::Network => 17,
-                crate::api::error::CoreError::NotConnected => 18,
-                crate::api::error::CoreError::Unauthorized => 19,
-                crate::api::error::CoreError::InvalidServerResponse => 20,
-                crate::api::error::CoreError::InvalidEnvelope => 21,
-                crate::api::error::CoreError::UnknownDestination => 22,
-                crate::api::error::CoreError::RateLimited => 23,
-                crate::api::error::CoreError::Internal => 24,
+                crate::api::error::CoreError::UnknownIdentity => 11,
+                crate::api::error::CoreError::InvalidSafetyNumber => 12,
+                crate::api::error::CoreError::DuplicateMessage => 13,
+                crate::api::error::CoreError::InvalidMessage => 14,
+                crate::api::error::CoreError::NoSenderCertificate => 15,
+                crate::api::error::CoreError::InvalidSenderCertificate => 16,
+                crate::api::error::CoreError::NoEventListener => 17,
+                crate::api::error::CoreError::InvalidServerConfig => 18,
+                crate::api::error::CoreError::Network => 19,
+                crate::api::error::CoreError::NotConnected => 20,
+                crate::api::error::CoreError::Unauthorized => 21,
+                crate::api::error::CoreError::InvalidServerResponse => 22,
+                crate::api::error::CoreError::InvalidEnvelope => 23,
+                crate::api::error::CoreError::UnknownDestination => 24,
+                crate::api::error::CoreError::RateLimited => 25,
+                crate::api::error::CoreError::Internal => 26,
                 _ => {
                     unimplemented!("");
                 }
@@ -1713,6 +2032,24 @@ impl SseEncode for i64 {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         serializer.cursor.write_i64::<NativeEndian>(self).unwrap();
+    }
+}
+
+impl SseEncode for crate::api::types::IdentityStatus {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(
+            match self {
+                crate::api::types::IdentityStatus::Unknown => 0,
+                crate::api::types::IdentityStatus::Default => 1,
+                crate::api::types::IdentityStatus::Verified => 2,
+                crate::api::types::IdentityStatus::Changed => 3,
+                _ => {
+                    unimplemented!("");
+                }
+            },
+            serializer,
+        );
     }
 }
 
@@ -1802,6 +2139,15 @@ impl SseEncode for crate::api::types::ReceivedMessage {
         <crate::api::types::DeviceAddress>::sse_encode(self.from, serializer);
         <u64>::sse_encode(self.server_timestamp, serializer);
         <Vec<u8>>::sse_encode(self.body, serializer);
+        <bool>::sse_encode(self.identity_changed, serializer);
+    }
+}
+
+impl SseEncode for crate::api::types::SafetyNumber {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <String>::sse_encode(self.digits, serializer);
+        <Vec<u8>>::sse_encode(self.qr, serializer);
     }
 }
 

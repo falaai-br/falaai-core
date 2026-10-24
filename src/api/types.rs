@@ -5,7 +5,9 @@ use std::fmt;
 
 use super::error::CoreError;
 use crate::messaging::InboxMessage;
+use crate::protocol::identity::SafetyCode;
 use crate::protocol::keys;
+use crate::protocol::store::PeerIdentityStatus;
 use crate::protocol::{self, Address, ProtocolError, PublicPreKey, SignedPublicPreKey};
 
 /// Dispositivo de uma conta: ACI (UUID em texto) e device id (1 a 127).
@@ -218,6 +220,11 @@ pub enum ChatEvent {
         from: DeviceAddress,
         /// Texto decifrado.
         body: Vec<u8>,
+        /// A chave de identidade da conta de `from` mudou nesta mensagem: o código de segurança
+        /// da conversa é outro. O app mostra o aviso neste ponto da conversa; se a conversa
+        /// estava verificada, o envio fica bloqueado até o usuário agir
+        /// ([`super::FalaaiCore::set_identity_verified`]).
+        identity_changed: bool,
     },
     /// O servidor gravou na fila do destinatário uma mensagem de
     /// [`super::FalaaiCore::send_message`]; ela saiu da outbox.
@@ -239,11 +246,17 @@ pub enum ChatEvent {
 impl fmt::Debug for ChatEvent {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::MessageReceived { id, from, body } => f
+            Self::MessageReceived {
+                id,
+                from,
+                body,
+                identity_changed,
+            } => f
                 .debug_struct("MessageReceived")
                 .field("id", id)
                 .field("from", from)
                 .field("len", &body.len())
+                .field("identity_changed", identity_changed)
                 .finish(),
             Self::MessageSent { .. } => f.write_str("MessageSent"),
             Self::MessageFailed { error, .. } => f
@@ -266,6 +279,9 @@ pub struct ReceivedMessage {
     pub server_timestamp: u64,
     /// Texto decifrado.
     pub body: Vec<u8>,
+    /// A chave de identidade da conta de `from` mudou nesta mensagem, como em
+    /// [`ChatEvent::MessageReceived`].
+    pub identity_changed: bool,
 }
 
 impl fmt::Debug for ReceivedMessage {
@@ -275,6 +291,7 @@ impl fmt::Debug for ReceivedMessage {
             .field("from", &self.from)
             .field("server_timestamp", &self.server_timestamp)
             .field("len", &self.body.len())
+            .field("identity_changed", &self.identity_changed)
             .finish()
     }
 }
@@ -286,6 +303,64 @@ impl From<InboxMessage> for ReceivedMessage {
             from: DeviceAddress::from(&message.from),
             server_timestamp: message.server_timestamp,
             body: message.body.to_vec(),
+            identity_changed: message.identity_changed,
+        }
+    }
+}
+
+/// Código de segurança de uma conversa (safety number): o fingerprint da libsignal sobre as
+/// chaves de identidade e os ACIs dos dois lados. Os dois aparelhos mostram os mesmos dígitos.
+///
+/// `Debug` omite o código: ele identifica o par de contas.
+#[derive(Clone, PartialEq, Eq)]
+pub struct SafetyNumber {
+    /// 60 dígitos decimais, para mostrar em grupos de 5 e conferir de viva voz.
+    pub digits: String,
+    /// Bytes para o QR. O outro aparelho lê o QR e confere com
+    /// [`super::FalaaiCore::safety_number_matches`].
+    pub qr: Vec<u8>,
+}
+
+impl fmt::Debug for SafetyNumber {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SafetyNumber")
+            .field("digits", &"<omitido>")
+            .field("qr_len", &self.qr.len())
+            .finish()
+    }
+}
+
+impl From<SafetyCode> for SafetyNumber {
+    fn from(code: SafetyCode) -> Self {
+        Self {
+            digits: code.digits,
+            qr: code.qr,
+        }
+    }
+}
+
+/// Situação da identidade de um contato frente ao que o usuário verificou.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IdentityStatus {
+    /// Nenhuma chave do contato ainda: não houve bundle nem mensagem dele.
+    Unknown,
+    /// Chave guardada na primeira vista, sem verificação do usuário. Uma troca é aceita e
+    /// avisada, sem bloquear.
+    Default,
+    /// A chave atual é a que o usuário verificou.
+    Verified,
+    /// O usuário verificou uma chave e a atual é outra: o envio está bloqueado
+    /// (`UntrustedIdentity`) até ele verificar a nova ou aceitar a troca.
+    Changed,
+}
+
+impl From<PeerIdentityStatus> for IdentityStatus {
+    fn from(status: PeerIdentityStatus) -> Self {
+        match status {
+            PeerIdentityStatus::Unknown => Self::Unknown,
+            PeerIdentityStatus::Default => Self::Default,
+            PeerIdentityStatus::Verified => Self::Verified,
+            PeerIdentityStatus::Changed => Self::Changed,
         }
     }
 }

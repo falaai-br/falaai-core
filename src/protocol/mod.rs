@@ -7,10 +7,14 @@
 //!
 //! Toda mensagem sai selada (sealed sender): o remetente só aparece dentro do selo, que só o
 //! destinatário abre, junto com o certificado de remetente emitido pelo servidor.
+//!
+//! A identidade de cada contato segue TOFU com safety numbers ([`identity`]): a troca de chave
+//! é guardada e avisada, e bloqueia o envio só em conversa verificada ([`store`]).
 
 pub(crate) mod access;
 pub(crate) mod certificate;
 mod error;
+pub(crate) mod identity;
 pub(crate) mod keys;
 pub(crate) mod signal;
 pub(crate) mod store;
@@ -34,12 +38,18 @@ pub(crate) type Plaintext = Zeroizing<Vec<u8>>;
 pub(crate) trait Sessions {
     /// Abre sessão com `peer` a partir do bundle de pré-chaves publicado por ele. Como
     /// [`Self::encrypt`] e [`Self::decrypt`], roda numa transação, com o ratchet preso contra
-    /// outros processos.
+    /// outros processos. Devolve `true` se a chave de identidade do bundle é outra que não a
+    /// guardada para a conta de `peer`: a troca foi aceita e deve virar aviso na conversa.
+    ///
+    /// Em conversa verificada, uma chave diferente da verificada não abre sessão
+    /// ([`ProtocolError::UntrustedIdentity`]), mas fica guardada como a atual, sem confiança:
+    /// o safety number passa a mostrá-la para o usuário conferir com o contato, e a sessão
+    /// antiga também deixa de enviar até ele agir.
     async fn start_session(
         &mut self,
         peer: &Address,
         bundle: &PeerBundle,
-    ) -> Result<(), ProtocolError>;
+    ) -> Result<bool, ProtocolError>;
 
     /// Guarda o certificado de remetente que o servidor emitiu para o dispositivo local. Falha
     /// com [`ProtocolError::InvalidSenderCertificate`] se não encadeia até o trust root, já
@@ -74,6 +84,9 @@ pub(crate) trait Sessions {
 pub(crate) struct Decrypted {
     pub(crate) from: Address,
     pub(crate) plaintext: Plaintext,
+    /// A chave de identidade da conta de `from` era outra antes desta mensagem: a troca foi
+    /// aceita (receber nunca bloqueia) e deve virar aviso na conversa.
+    pub(crate) identity_changed: bool,
 }
 
 /// Dispositivo de uma conta: ACI e device id.

@@ -92,6 +92,9 @@ abstract class FalaaiCoreLibApiImplPlatform
   PlatformInt64 dco_decode_i_64(dynamic raw);
 
   @protected
+  IdentityStatus dco_decode_identity_status(dynamic raw);
+
+  @protected
   List<Uint8List> dco_decode_list_list_prim_u_8_strict(dynamic raw);
 
   @protected
@@ -120,6 +123,9 @@ abstract class FalaaiCoreLibApiImplPlatform
 
   @protected
   ReceivedMessage dco_decode_received_message(dynamic raw);
+
+  @protected
+  SafetyNumber dco_decode_safety_number(dynamic raw);
 
   @protected
   ServerConfig dco_decode_server_config(dynamic raw);
@@ -217,6 +223,9 @@ abstract class FalaaiCoreLibApiImplPlatform
   PlatformInt64 sse_decode_i_64(SseDeserializer deserializer);
 
   @protected
+  IdentityStatus sse_decode_identity_status(SseDeserializer deserializer);
+
+  @protected
   List<Uint8List> sse_decode_list_list_prim_u_8_strict(
     SseDeserializer deserializer,
   );
@@ -251,6 +260,9 @@ abstract class FalaaiCoreLibApiImplPlatform
 
   @protected
   ReceivedMessage sse_decode_received_message(SseDeserializer deserializer);
+
+  @protected
+  SafetyNumber sse_decode_safety_number(SseDeserializer deserializer);
 
   @protected
   ServerConfig sse_decode_server_config(SseDeserializer deserializer);
@@ -358,6 +370,12 @@ abstract class FalaaiCoreLibApiImplPlatform
   void sse_encode_i_64(PlatformInt64 self, SseSerializer serializer);
 
   @protected
+  void sse_encode_identity_status(
+    IdentityStatus self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_list_list_prim_u_8_strict(
     List<Uint8List> self,
     SseSerializer serializer,
@@ -404,6 +422,9 @@ abstract class FalaaiCoreLibApiImplPlatform
     ReceivedMessage self,
     SseSerializer serializer,
   );
+
+  @protected
+  void sse_encode_safety_number(SafetyNumber self, SseSerializer serializer);
 
   @protected
   void sse_encode_server_config(ServerConfig self, SseSerializer serializer);

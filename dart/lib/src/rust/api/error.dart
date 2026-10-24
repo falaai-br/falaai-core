@@ -41,8 +41,17 @@ enum CoreError {
   /// Não há sessão com o dispositivo remoto: buscar o bundle e chamar `process_prekey_bundle`.
   sessionNotFound,
 
-  /// A identidade do contato mudou e não foi aceita.
+  /// Conversa verificada cuja chave de identidade do contato mudou: o envio fica bloqueado
+  /// até o usuário conferir o código de segurança novo e verificar de novo, ou aceitar a
+  /// troca, com `set_identity_verified`.
   untrustedIdentity,
+
+  /// Nenhuma chave de identidade do contato ainda: não houve bundle nem mensagem dele, então
+  /// não há código de segurança para mostrar nem identidade para verificar.
+  unknownIdentity,
+
+  /// O QR lido não é um código de segurança, ou é de uma versão incompatível.
+  invalidSafetyNumber,
 
   /// Envelope já decifrado antes.
   duplicateMessage,

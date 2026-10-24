@@ -109,4 +109,19 @@ pub(super) const MIGRATIONS: &[&str] = &[
         outcome INTEGER
     ) STRICT;
     ",
+    // 6: safety numbers. A chave de identidade que o usuário verificou para cada contato
+    // (por conta, como `identities`): se a atual for outra, a conversa está com a identidade
+    // mudada e o envio fica bloqueado. E a marca, em cada mensagem recebida, de que a identidade
+    // do remetente mudou ao decifrá-la, para o aviso aparecer no lugar certo da conversa,
+    // inclusive quando quem decifrou foi a extensão de notificação.
+    "
+    CREATE TABLE verified_identities (
+        name TEXT PRIMARY KEY,
+        identity_key BLOB NOT NULL
+    ) STRICT;
+
+    ALTER TABLE received_messages
+        ADD COLUMN identity_changed INTEGER NOT NULL DEFAULT 0
+        CHECK (identity_changed IN (0, 1));
+    ",
 ];

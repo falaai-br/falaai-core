@@ -10,7 +10,7 @@ import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
 part 'types.freezed.dart';
 
 // These functions are ignored because they are not marked as `pub`: `to_protocol`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `try_from`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `try_from`
 
 /// Parte pública das chaves da conta, para enviar ao servidor no registro.
 class AccountKeys {
@@ -77,6 +77,12 @@ sealed class ChatEvent with _$ChatEvent {
 
     /// Texto decifrado.
     required Uint8List body,
+
+    /// A chave de identidade da conta de `from` mudou nesta mensagem: o código de segurança
+    /// da conversa é outro. O app mostra o aviso neste ponto da conversa; se a conversa
+    /// estava verificada, o envio fica bloqueado até o usuário agir
+    /// ([`super::FalaaiCore::set_identity_verified`]).
+    required bool identityChanged,
   }) = ChatEvent_MessageReceived;
 
   /// O servidor gravou na fila do destinatário uma mensagem de
@@ -140,6 +146,23 @@ class Envelope {
       other is Envelope &&
           runtimeType == other.runtimeType &&
           body == other.body;
+}
+
+/// Situação da identidade de um contato frente ao que o usuário verificou.
+enum IdentityStatus {
+  /// Nenhuma chave do contato ainda: não houve bundle nem mensagem dele.
+  unknown,
+
+  /// Chave guardada na primeira vista, sem verificação do usuário. Uma troca é aceita e
+  /// avisada, sem bloquear.
+  default_,
+
+  /// A chave atual é a que o usuário verificou.
+  verified,
+
+  /// O usuário verificou uma chave e a atual é outra: o envio está bloqueado
+  /// (`UntrustedIdentity`) até ele verificar a nova ou aceitar a troca.
+  changed,
 }
 
 /// Pré-chave pública EC descartável.
@@ -224,16 +247,25 @@ class ReceivedMessage {
   /// Texto decifrado.
   final Uint8List body;
 
+  /// A chave de identidade da conta de `from` mudou nesta mensagem, como em
+  /// [`ChatEvent::MessageReceived`].
+  final bool identityChanged;
+
   const ReceivedMessage({
     required this.id,
     required this.from,
     required this.serverTimestamp,
     required this.body,
+    required this.identityChanged,
   });
 
   @override
   int get hashCode =>
-      id.hashCode ^ from.hashCode ^ serverTimestamp.hashCode ^ body.hashCode;
+      id.hashCode ^
+      from.hashCode ^
+      serverTimestamp.hashCode ^
+      body.hashCode ^
+      identityChanged.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -243,7 +275,34 @@ class ReceivedMessage {
           id == other.id &&
           from == other.from &&
           serverTimestamp == other.serverTimestamp &&
-          body == other.body;
+          body == other.body &&
+          identityChanged == other.identityChanged;
+}
+
+/// Código de segurança de uma conversa (safety number): o fingerprint da libsignal sobre as
+/// chaves de identidade e os ACIs dos dois lados. Os dois aparelhos mostram os mesmos dígitos.
+///
+/// `Debug` omite o código: ele identifica o par de contas.
+class SafetyNumber {
+  /// 60 dígitos decimais, para mostrar em grupos de 5 e conferir de viva voz.
+  final String digits;
+
+  /// Bytes para o QR. O outro aparelho lê o QR e confere com
+  /// [`super::FalaaiCore::safety_number_matches`].
+  final Uint8List qr;
+
+  const SafetyNumber({required this.digits, required this.qr});
+
+  @override
+  int get hashCode => digits.hashCode ^ qr.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is SafetyNumber &&
+          runtimeType == other.runtimeType &&
+          digits == other.digits &&
+          qr == other.qr;
 }
 
 /// Onde fica o servidor, da configuração do app.

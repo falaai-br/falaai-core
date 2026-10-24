@@ -3,8 +3,9 @@
 use std::time::SystemTime;
 
 use libsignal_protocol::{
-    IdentityKeyStore, KyberPreKeyStore, PreKeyStore, SessionStore, SignedPreKeyStore, Timestamp,
-    process_prekey_bundle, sealed_sender_decrypt, sealed_sender_encrypt,
+    IdentityKeyStore, KyberPreKeyStore, PreKeyStore, SessionStore, SignalProtocolError,
+    SignedPreKeyStore, Timestamp, process_prekey_bundle, sealed_sender_decrypt,
+    sealed_sender_encrypt,
 };
 
 use super::certificate::{self, SenderCertificate, TrustRoot};
@@ -34,6 +35,10 @@ pub(crate) trait SignalStores {
 
     /// Desfaz a transação aberta por [`Self::begin`].
     fn rollback(&mut self);
+
+    /// `true` se, desde o [`Self::begin`], o store de identidades trocou a chave guardada de um
+    /// contato por outra.
+    fn identity_changed(&self) -> bool;
 }
 
 /// Transação sobre os stores, desfeita no drop se não for confirmada: um erro no meio de uma
@@ -51,6 +56,10 @@ impl<'a, S: SignalStores> Transaction<'a, S> {
 
     fn parts(&mut self) -> StoreParts<'_> {
         self.stores.parts()
+    }
+
+    fn identity_changed(&self) -> bool {
+        self.stores.identity_changed()
     }
 
     fn commit(mut self) -> Result<(), ProtocolError> {
@@ -113,10 +122,17 @@ impl<S: SignalStores> Sessions for LibsignalSessions<S> {
         &mut self,
         peer: &Address,
         bundle: &PeerBundle,
-    ) -> Result<(), ProtocolError> {
+    ) -> Result<bool, ProtocolError> {
         let mut transaction = Transaction::begin(&mut self.stores)?;
         let stores = transaction.parts();
-        process_prekey_bundle(
+        // A chave do bundle vira a guardada antes de abrir a sessão: sem verificação, a troca é
+        // aceita (e marcada); em conversa verificada, a libsignal recusa a chave que não é a
+        // verificada, e a guardada fica, sem confiança, para o safety number já mostrá-la.
+        stores
+            .identities
+            .save_identity(&peer.0, bundle.0.identity_key()?)
+            .await?;
+        let processed = process_prekey_bundle(
             &peer.0,
             &self.local.0,
             stores.sessions,
@@ -125,8 +141,21 @@ impl<S: SignalStores> Sessions for LibsignalSessions<S> {
             SystemTime::now(),
             &mut rand::rng(),
         )
-        .await?;
-        transaction.commit()
+        .await;
+        match processed {
+            Ok(()) => {
+                let identity_changed = transaction.identity_changed();
+                transaction.commit()?;
+                Ok(identity_changed)
+            }
+            Err(SignalProtocolError::UntrustedIdentity(_)) => {
+                // Fica só a chave guardada; o envio segue bloqueado até o usuário agir.
+                transaction.commit()?;
+                Err(ProtocolError::UntrustedIdentity)
+            }
+            // Bundle inválido: nem a chave fica (a transação é desfeita no drop).
+            Err(error) => Err(error.into()),
+        }
     }
 
     async fn set_sender_certificate(&mut self, certificate: &[u8]) -> Result<(), ProtocolError> {
@@ -210,9 +239,11 @@ impl<S: SignalStores> Sessions for LibsignalSessions<S> {
             .ok()
             .filter(|from| from.aci() == decrypted.sender_uuid)
             .ok_or(ProtocolError::InvalidMessage)?;
+        let identity_changed = transaction.identity_changed();
         let delivered = deliver(Decrypted {
             from,
             plaintext: decrypted.message.into(),
+            identity_changed,
         })?;
         transaction.commit()?;
         Ok(delivered)
@@ -256,6 +287,11 @@ mod tests {
         }
 
         fn rollback(&mut self) {}
+
+        // O store em memória da libsignal não conta trocas; o aviso é testado sobre o SQLite.
+        fn identity_changed(&self) -> bool {
+            false
+        }
     }
 
     fn now_millis() -> Result<u64, Box<dyn Error>> {

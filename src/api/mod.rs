@@ -25,6 +25,12 @@
 //! quem a decifrar: o app ou a Notification Service Extension do iOS. O evento só chega ao
 //! processo que decifrou; o outro lê o que foi gravado com [`FalaaiCore::received_messages`].
 //!
+//! Cada conversa tem um código de segurança ([`FalaaiCore::safety_number`]), o fingerprint da
+//! libsignal sobre as identidades dos dois lados. A primeira chave de um contato é aceita
+//! (TOFU); uma troca é aceita e avisada na mensagem em que chegou (`identity_changed`), e só
+//! bloqueia o envio ([`CoreError::UntrustedIdentity`]) em conversa que o usuário marcou como
+//! verificada ([`FalaaiCore::set_identity_verified`]), até ele verificar de novo ou aceitar.
+//!
 //! As funções são síncronas no Rust e o flutter_rust_bridge as roda no seu pool de threads; no
 //! Dart todas devolvem `Future`. Os futuros da libsignal não são `Send` e os stores sobre SQLite
 //! nunca suspendem, então são conduzidos na própria thread por [`block_on`].
@@ -46,7 +52,8 @@ use zeroize::Zeroizing;
 
 use self::error::CoreError;
 use self::types::{
-    AccountKeys, ChatEvent, DeviceAddress, Envelope, PreKeyBundle, ReceivedMessage, ServerConfig,
+    AccountKeys, ChatEvent, DeviceAddress, Envelope, IdentityStatus, PreKeyBundle, ReceivedMessage,
+    SafetyNumber, ServerConfig,
 };
 use crate::frb_generated::StreamSink;
 use crate::messaging::Inbox;
@@ -56,6 +63,7 @@ use crate::messaging::outbox::{
 };
 use crate::protocol::access::AccessKey;
 use crate::protocol::certificate::TrustRoot;
+use crate::protocol::identity;
 use crate::protocol::signal::LibsignalSessions;
 use crate::protocol::store::{SqliteStore, SqliteStores};
 use crate::protocol::{self, Address, Sessions};
@@ -163,14 +171,71 @@ impl FalaaiCore {
     }
 
     /// Abre sessão com `peer` a partir do bundle de pré-chaves que ele publicou (PQXDH).
+    /// Devolve `true` se a chave de identidade do bundle é outra que não a conhecida para a
+    /// conta de `peer`: a troca foi aceita e o app mostra o aviso de código de segurança novo.
+    ///
+    /// Em conversa verificada ([`Self::set_identity_verified`]), uma chave diferente da
+    /// verificada falha com [`CoreError::UntrustedIdentity`] sem abrir sessão; a chave nova fica
+    /// registrada, então [`Self::safety_number`] já mostra o código novo e
+    /// [`Self::identity_status`] fica [`IdentityStatus::Changed`] até o usuário agir.
     pub fn process_prekey_bundle(
         &self,
         peer: DeviceAddress,
         bundle: PreKeyBundle,
-    ) -> Result<(), CoreError> {
+    ) -> Result<bool, CoreError> {
         let peer = Address::try_from(&peer)?;
         let bundle = bundle.to_protocol(&peer)?;
         self.with_sessions(|sessions| block_on(sessions.start_session(&peer, &bundle)))
+    }
+
+    /// Código de segurança da conversa com a conta de `peer`, com a chave de identidade
+    /// conhecida para ela (a última vista num bundle ou numa mensagem). Os dois aparelhos
+    /// mostram os mesmos 60 dígitos; cada um mostra seu QR para o outro ler. Exige a conta
+    /// ([`CoreError::NoAccount`]) e alguma chave do contato ([`CoreError::UnknownIdentity`]).
+    pub fn safety_number(&self, peer: DeviceAddress) -> Result<SafetyNumber, CoreError> {
+        let peer = Address::try_from(&peer)?;
+        let local = self.store.local_address()?.ok_or(CoreError::NoAccount)?;
+        Ok(identity::safety_number(&self.store, &local, &peer)?.into())
+    }
+
+    /// `true` se `scanned_qr`, lido do QR que o aparelho de `peer` mostra, é o código de
+    /// segurança desta conversa: as identidades dos dois lados batem. Falha com
+    /// [`CoreError::InvalidSafetyNumber`] se o QR não for um código de segurança. Conferir não
+    /// marca a conversa como verificada: isso é [`Self::set_identity_verified`].
+    pub fn safety_number_matches(
+        &self,
+        peer: DeviceAddress,
+        scanned_qr: Vec<u8>,
+    ) -> Result<bool, CoreError> {
+        let peer = Address::try_from(&peer)?;
+        let local = self.store.local_address()?.ok_or(CoreError::NoAccount)?;
+        Ok(identity::safety_number_matches(
+            &self.store,
+            &local,
+            &peer,
+            &scanned_qr,
+        )?)
+    }
+
+    /// Situação da identidade da conta de `peer` frente ao que o usuário verificou.
+    pub fn identity_status(&self, peer: DeviceAddress) -> Result<IdentityStatus, CoreError> {
+        let peer = Address::try_from(&peer)?;
+        Ok(self.store.identity_status(&peer)?.into())
+    }
+
+    /// Marca a chave de identidade atual da conta de `peer` como verificada pelo usuário
+    /// (`true`), depois de ele conferir o código de segurança; ou desfaz a verificação
+    /// (`false`). A verificação vale para aquela chave: se ela mudar, a conversa passa a
+    /// [`IdentityStatus::Changed`] e o envio é bloqueado até chamar de novo com `true` (a chave
+    /// nova foi conferida) ou `false` (a troca foi aceita sem conferir). Verificar exige alguma
+    /// chave do contato ([`CoreError::UnknownIdentity`]).
+    pub fn set_identity_verified(
+        &self,
+        peer: DeviceAddress,
+        verified: bool,
+    ) -> Result<(), CoreError> {
+        let peer = Address::try_from(&peer)?;
+        Ok(self.store.set_identity_verified(&peer, verified)?)
     }
 
     /// Cifra `plaintext` para `peer` e sela com o certificado de remetente; o resultado vai em
@@ -510,6 +575,7 @@ fn receive(
                 incoming.client_message_id,
                 timestamp,
                 &decrypted.plaintext,
+                decrypted.identity_changed,
             )?
             else {
                 return Ok(false);
@@ -518,6 +584,7 @@ fn receive(
                 id,
                 from: DeviceAddress::from(&decrypted.from),
                 body: decrypted.plaintext.to_vec(),
+                identity_changed: decrypted.identity_changed,
             };
             if deliver(event) {
                 Ok(true)
@@ -619,7 +686,11 @@ mod tests {
         }
 
         fn open(&self, seed: u8) -> Result<FalaaiCore, CoreError> {
-            let path = self.dir.path().join(format!("{seed:02x}.db"));
+            self.open_file(&format!("{seed:02x}.db"))
+        }
+
+        fn open_file(&self, file: &str) -> Result<FalaaiCore, CoreError> {
+            let path = self.dir.path().join(file);
             FalaaiCore::open(
                 path.to_string_lossy().into_owned(),
                 KEY.to_vec(),
@@ -652,7 +723,11 @@ mod tests {
         /// Gera as chaves, "registra" (grava o endereço local), entrega o certificado de remetente
         /// e assina os eventos.
         fn register(server: &Server, seed: u8) -> Result<Self, Box<dyn Error>> {
-            let core = server.open(seed)?;
+            Self::register_file(server, seed, &format!("{seed:02x}.db"))
+        }
+
+        fn register_file(server: &Server, seed: u8, file: &str) -> Result<Self, Box<dyn Error>> {
+            let core = server.open_file(file)?;
             let keys = core.generate_account_keys()?;
             let address = address(seed);
             core.set_local_address(address.clone())?;
@@ -664,6 +739,25 @@ mod tests {
                 core,
                 events,
             })
+        }
+
+        /// O mesmo aparelho reinstalado sem backup: a mesma conta (mesmo endereço), banco novo
+        /// e, portanto, identidade nova. Os contatos veem o código de segurança mudar.
+        fn reinstall(&self, server: &Server, seed: u8) -> Result<Self, Box<dyn Error>> {
+            Self::register_file(server, seed, &format!("{seed:02x}-reinstalado.db"))
+        }
+
+        fn status(&self, peer: &Device) -> Result<IdentityStatus, CoreError> {
+            self.core.identity_status(peer.address.clone())
+        }
+
+        fn safety_number(&self, peer: &Device) -> Result<SafetyNumber, CoreError> {
+            self.core.safety_number(peer.address.clone())
+        }
+
+        fn verify(&self, peer: &Device, verified: bool) -> Result<(), CoreError> {
+            self.core
+                .set_identity_verified(peer.address.clone(), verified)
         }
 
         /// O mesmo aparelho aberto por outro processo, como a extensão de notificação: outro
@@ -681,15 +775,21 @@ mod tests {
 
         /// O que o servidor entregaria: uma pré-chave EC e uma Kyber descartáveis.
         fn bundle(&self) -> Result<PreKeyBundle, Box<dyn Error>> {
+            self.bundle_nth(0)
+        }
+
+        /// Bundle com a `index`-ésima pré-chave descartável de cada tipo: as anteriores podem já
+        /// ter sido consumidas por um PQXDH recebido.
+        fn bundle_nth(&self, index: usize) -> Result<PreKeyBundle, Box<dyn Error>> {
             Ok(PreKeyBundle {
                 registration_id: self.keys.registration_id,
                 identity_key: self.keys.identity_key.clone(),
-                pre_key: self.keys.pre_keys.first().cloned(),
+                pre_key: self.keys.pre_keys.get(index).cloned(),
                 signed_pre_key: self.keys.signed_pre_key.clone(),
                 kyber_pre_key: self
                     .keys
                     .kyber_pre_keys
-                    .first()
+                    .get(index)
                     .cloned()
                     .ok_or("sem kyber")?,
             })
@@ -706,18 +806,34 @@ mod tests {
         /// Decifra, confere o remetente e que a mensagem do evento ficou gravada, e devolve o
         /// texto.
         fn receive(&self, from: &Device, envelope: Envelope) -> Result<Vec<u8>, Box<dyn Error>> {
+            let (body, identity_changed) = self.receive_noting_identity(from, envelope)?;
+            assert!(!identity_changed, "identidade mudou sem o teste esperar");
+            Ok(body)
+        }
+
+        /// Como [`Self::receive`], devolvendo também se a identidade de `from` mudou nesta
+        /// mensagem, no evento e na mensagem gravada.
+        fn receive_noting_identity(
+            &self,
+            from: &Device,
+            envelope: Envelope,
+        ) -> Result<(Vec<u8>, bool), Box<dyn Error>> {
             self.deliver(envelope)?;
             match self.events.try_recv()? {
                 ChatEvent::MessageReceived {
                     id,
                     from: sender,
                     body,
+                    identity_changed,
                 } => {
                     assert_eq!(sender, from.address);
                     let stored = self.core.received_messages(id - 1, 1)?;
                     let stored = stored.first().ok_or("mensagem não gravada")?;
-                    assert_eq!((stored.id, &stored.body), (id, &body));
-                    Ok(body)
+                    assert_eq!(
+                        (stored.id, &stored.body, stored.identity_changed),
+                        (id, &body, identity_changed)
+                    );
+                    Ok((body, identity_changed))
                 }
                 other => Err(format!("esperava mensagem, veio {other:?}").into()),
             }
@@ -1263,6 +1379,7 @@ mod tests {
             id: 7,
             from: from.clone(),
             body: b"segredo".to_vec(),
+            identity_changed: false,
         };
         let envelope = Envelope {
             body: b"segredo".to_vec(),
@@ -1272,6 +1389,11 @@ mod tests {
             from: from.clone(),
             server_timestamp: 1,
             body: b"segredo".to_vec(),
+            identity_changed: true,
+        };
+        let safety_number = SafetyNumber {
+            digits: "segredo".to_owned(),
+            qr: b"segredo".to_vec(),
         };
         let sent = ChatEvent::MessageSent {
             client_message_id: vec![0xEE; 16],
@@ -1287,10 +1409,242 @@ mod tests {
             format!("{event:?}"),
             format!("{envelope:?}"),
             format!("{message:?}"),
+            format!("{safety_number:?}"),
         ] {
             assert!(!debug.contains(&from.aci), "{debug}");
             assert!(!debug.contains("segredo"), "{debug}");
             assert!(!debug.contains("115, 101"), "{debug}");
         }
+    }
+
+    #[test]
+    fn os_dois_lados_mostram_o_mesmo_codigo_de_seguranca_e_conferem_o_qr() -> TestResult {
+        let server = Server::new()?;
+        let (alice, bob) = alice_and_bob(&server)?;
+        // Bob só conhece a identidade de Alice quando a primeira mensagem dela chega.
+        assert_eq!(bob.status(&alice)?, IdentityStatus::Unknown);
+        assert_eq!(
+            bob.safety_number(&alice).err(),
+            Some(CoreError::UnknownIdentity)
+        );
+        assert_eq!(bob.verify(&alice, true), Err(CoreError::UnknownIdentity));
+        bob.receive(&alice, alice.send(&bob, b"oi")?)?;
+
+        let (from_alice, from_bob) = (alice.safety_number(&bob)?, bob.safety_number(&alice)?);
+        assert_eq!(from_alice.digits, from_bob.digits);
+        assert_eq!(from_alice.digits.len(), 60);
+        assert!(
+            alice
+                .core
+                .safety_number_matches(bob.address.clone(), from_bob.qr.clone())?
+        );
+        assert!(
+            bob.core
+                .safety_number_matches(alice.address.clone(), from_alice.qr.clone())?
+        );
+        assert!(
+            !alice
+                .core
+                .safety_number_matches(bob.address.clone(), from_alice.qr)?
+        );
+        assert_eq!(
+            alice
+                .core
+                .safety_number_matches(bob.address.clone(), b"lixo".to_vec()),
+            Err(CoreError::InvalidSafetyNumber)
+        );
+        assert_eq!(alice.status(&bob)?, IdentityStatus::Default);
+        Ok(())
+    }
+
+    #[test]
+    fn codigo_de_seguranca_exige_conta() -> TestResult {
+        let server = Server::new()?;
+        let core = server.open(0xA1)?;
+        assert_eq!(core.safety_number(address(0xB0)), Err(CoreError::NoAccount));
+        assert_eq!(
+            core.safety_number_matches(address(0xB0), Vec::new()),
+            Err(CoreError::NoAccount)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn troca_de_identidade_sem_verificacao_e_aceita_e_avisada_na_mensagem() -> TestResult {
+        let server = Server::new()?;
+        let (alice, bob) = alice_and_bob(&server)?;
+        bob.receive(&alice, alice.send(&bob, b"oi")?)?;
+        let before = alice.safety_number(&bob)?;
+
+        // Bob reinstala sem backup e escreve para Alice com a identidade nova.
+        let bob = bob.reinstall(&server, 0xB0)?;
+        assert!(
+            !bob.core
+                .process_prekey_bundle(alice.address.clone(), alice.bundle()?)?
+        );
+        let (body, identity_changed) =
+            alice.receive_noting_identity(&bob, bob.send(&alice, b"voltei")?)?;
+        assert_eq!(body, b"voltei");
+        assert!(identity_changed);
+        assert_eq!(alice.status(&bob)?, IdentityStatus::Default);
+        let after = alice.safety_number(&bob)?;
+        assert_ne!(after.digits, before.digits);
+        assert_eq!(after.digits, bob.safety_number(&alice)?.digits);
+
+        // Só a mensagem da troca leva o aviso; e Alice responde sem bloqueio.
+        assert_eq!(
+            alice.receive(&bob, bob.send(&alice, b"tudo bem?")?)?,
+            b"tudo bem?"
+        );
+        assert_eq!(
+            bob.receive(&alice, alice.send(&bob, b"oi de novo")?)?,
+            b"oi de novo"
+        );
+        let flags: Vec<bool> = alice
+            .core
+            .received_messages(0, 10)?
+            .iter()
+            .map(|m| m.identity_changed)
+            .collect();
+        assert_eq!(flags, [true, false]);
+        Ok(())
+    }
+
+    #[test]
+    fn conversa_verificada_recebe_a_troca_mas_bloqueia_o_envio_ate_o_usuario_agir() -> TestResult {
+        let server = Server::new()?;
+        let (alice, bob) = alice_and_bob(&server)?;
+        bob.receive(&alice, alice.send(&bob, b"oi")?)?;
+        alice.verify(&bob, true)?;
+        assert_eq!(alice.status(&bob)?, IdentityStatus::Verified);
+        assert_eq!(
+            bob.receive(&alice, alice.send(&bob, b"verificado")?)?,
+            b"verificado"
+        );
+
+        let bob = bob.reinstall(&server, 0xB0)?;
+        bob.core
+            .process_prekey_bundle(alice.address.clone(), alice.bundle()?)?;
+        let (_, identity_changed) =
+            alice.receive_noting_identity(&bob, bob.send(&alice, b"voltei")?)?;
+        assert!(identity_changed);
+        assert_eq!(alice.status(&bob)?, IdentityStatus::Changed);
+        assert_eq!(
+            alice.send(&bob, b"bloqueada"),
+            Err(CoreError::UntrustedIdentity)
+        );
+        // Receber segue aberto enquanto o envio está bloqueado.
+        assert_eq!(
+            alice.receive(&bob, bob.send(&alice, b"ainda aqui")?)?,
+            b"ainda aqui"
+        );
+
+        // Aceitar a troca sem conferir volta ao padrão e libera o envio.
+        alice.verify(&bob, false)?;
+        assert_eq!(alice.status(&bob)?, IdentityStatus::Default);
+        assert_eq!(
+            bob.receive(&alice, alice.send(&bob, b"liberada")?)?,
+            b"liberada"
+        );
+
+        // Conferir o código novo e verificar de novo também libera, e volta a proteger.
+        alice.verify(&bob, true)?;
+        assert_eq!(alice.status(&bob)?, IdentityStatus::Verified);
+        assert_eq!(
+            bob.receive(&alice, alice.send(&bob, b"verificada")?)?,
+            b"verificada"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn bundle_com_identidade_nova_em_conversa_verificada_nao_abre_sessao_e_mostra_o_codigo_novo()
+    -> TestResult {
+        let server = Server::new()?;
+        let (alice, bob) = alice_and_bob(&server)?;
+        bob.receive(&alice, alice.send(&bob, b"oi")?)?;
+        alice.verify(&bob, true)?;
+
+        // O Bob reinstalado conhece a identidade de Alice pelo bundle dela, sem lhe escrever.
+        let bob = bob.reinstall(&server, 0xB0)?;
+        assert!(
+            !bob.core
+                .process_prekey_bundle(alice.address.clone(), alice.bundle()?)?
+        );
+        assert_eq!(
+            alice
+                .core
+                .process_prekey_bundle(bob.address.clone(), bob.bundle()?),
+            Err(CoreError::UntrustedIdentity)
+        );
+        assert_eq!(alice.status(&bob)?, IdentityStatus::Changed);
+        // A identidade nova ficou registrada, sem confiança: o código já é o novo, e Bob ainda
+        // não tem sessão com Alice.
+        assert_eq!(
+            alice.safety_number(&bob)?.digits,
+            bob.safety_number(&alice)?.digits
+        );
+        assert_eq!(alice.send(&bob, b"oi"), Err(CoreError::UntrustedIdentity));
+
+        // Conferido o código, a sessão abre com a chave já conhecida (sem nova troca).
+        alice.verify(&bob, true)?;
+        assert!(
+            !alice
+                .core
+                .process_prekey_bundle(bob.address.clone(), bob.bundle()?)?
+        );
+        assert_eq!(
+            bob.receive(&alice, alice.send(&bob, b"agora sim")?)?,
+            b"agora sim"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn bundle_com_identidade_nova_sem_verificacao_abre_sessao_e_avisa() -> TestResult {
+        let server = Server::new()?;
+        let (alice, bob) = alice_and_bob(&server)?;
+        bob.receive(&alice, alice.send(&bob, b"oi")?)?;
+        assert_eq!(alice.status(&bob)?, IdentityStatus::Default);
+
+        let bob = bob.reinstall(&server, 0xB0)?;
+        assert!(
+            alice
+                .core
+                .process_prekey_bundle(bob.address.clone(), bob.bundle()?)?
+        );
+        assert_eq!(alice.status(&bob)?, IdentityStatus::Default);
+        assert_eq!(
+            bob.receive(&alice, alice.send(&bob, b"oi de novo")?)?,
+            b"oi de novo"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn aviso_de_troca_decifrado_pela_extensao_fica_gravado_para_o_app() -> TestResult {
+        let server = Server::new()?;
+        let (alice, app) = alice_and_bob(&server)?;
+        app.receive(&alice, alice.send(&app, b"oi")?)?;
+        let extension = app.other_process(&server, 0xB0)?;
+
+        let alice = alice.reinstall(&server, 0xA1)?;
+        alice
+            .core
+            .process_prekey_bundle(app.address.clone(), app.bundle_nth(1)?)?;
+        let (_, identity_changed) =
+            extension.receive_noting_identity(&alice, alice.send(&app, b"voltei")?)?;
+        assert!(identity_changed);
+
+        assert!(app.core.changed_by_other_process()?);
+        let stored = app.core.received_messages(0, 10)?;
+        let [first, from_extension] = stored.as_slice() else {
+            return Err("esperava duas mensagens".into());
+        };
+        assert!(!first.identity_changed);
+        assert!(from_extension.identity_changed);
+        assert_eq!(from_extension.body, b"voltei");
+        assert_eq!(app.status(&alice)?, IdentityStatus::Default);
+        Ok(())
     }
 }

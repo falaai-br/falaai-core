@@ -72,7 +72,7 @@ class FalaaiCoreLib
   String get codegenVersion => '2.13.0';
 
   @override
-  int get rustContentHash => 94120224;
+  int get rustContentHash => -180245800;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -119,13 +119,18 @@ abstract class FalaaiCoreLibApi extends BaseApi {
     required FalaaiCore that,
   });
 
+  Future<IdentityStatus> crateApiFalaaiCoreIdentityStatus({
+    required FalaaiCore that,
+    required DeviceAddress peer,
+  });
+
   Future<FalaaiCore> crateApiFalaaiCoreOpen({
     required String dbPath,
     required List<int> dbKey,
     required List<int> trustRoot,
   });
 
-  Future<void> crateApiFalaaiCoreProcessPrekeyBundle({
+  Future<bool> crateApiFalaaiCoreProcessPrekeyBundle({
     required FalaaiCore that,
     required DeviceAddress peer,
     required PreKeyBundle bundle,
@@ -135,6 +140,17 @@ abstract class FalaaiCoreLibApi extends BaseApi {
     required FalaaiCore that,
     required PlatformInt64 after,
     required int limit,
+  });
+
+  Future<SafetyNumber> crateApiFalaaiCoreSafetyNumber({
+    required FalaaiCore that,
+    required DeviceAddress peer,
+  });
+
+  Future<bool> crateApiFalaaiCoreSafetyNumberMatches({
+    required FalaaiCore that,
+    required DeviceAddress peer,
+    required List<int> scannedQr,
   });
 
   Future<void> crateApiFalaaiCoreSend({
@@ -148,6 +164,12 @@ abstract class FalaaiCoreLibApi extends BaseApi {
     required FalaaiCore that,
     required DeviceAddress peer,
     required List<int> body,
+  });
+
+  Future<void> crateApiFalaaiCoreSetIdentityVerified({
+    required FalaaiCore that,
+    required DeviceAddress peer,
+    required bool verified,
   });
 
   Future<void> crateApiFalaaiCoreSetLocalAddress({
@@ -480,6 +502,44 @@ class FalaaiCoreLibApiImpl extends FalaaiCoreLibApiImplPlatform
       );
 
   @override
+  Future<IdentityStatus> crateApiFalaaiCoreIdentityStatus({
+    required FalaaiCore that,
+    required DeviceAddress peer,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFalaaiCore(
+            that,
+            serializer,
+          );
+          sse_encode_box_autoadd_device_address(peer, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 9,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_identity_status,
+          decodeErrorData: sse_decode_core_error,
+        ),
+        constMeta: kCrateApiFalaaiCoreIdentityStatusConstMeta,
+        argValues: [that, peer],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiFalaaiCoreIdentityStatusConstMeta =>
+      const TaskConstMeta(
+        debugName: "FalaaiCore_identity_status",
+        argNames: ["that", "peer"],
+      );
+
+  @override
   Future<FalaaiCore> crateApiFalaaiCoreOpen({
     required String dbPath,
     required List<int> dbKey,
@@ -495,7 +555,7 @@ class FalaaiCoreLibApiImpl extends FalaaiCoreLibApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 9,
+            funcId: 10,
             port: port_,
           );
         },
@@ -517,7 +577,7 @@ class FalaaiCoreLibApiImpl extends FalaaiCoreLibApiImplPlatform
   );
 
   @override
-  Future<void> crateApiFalaaiCoreProcessPrekeyBundle({
+  Future<bool> crateApiFalaaiCoreProcessPrekeyBundle({
     required FalaaiCore that,
     required DeviceAddress peer,
     required PreKeyBundle bundle,
@@ -535,12 +595,12 @@ class FalaaiCoreLibApiImpl extends FalaaiCoreLibApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 10,
+            funcId: 11,
             port: port_,
           );
         },
         codec: SseCodec(
-          decodeSuccessData: sse_decode_unit,
+          decodeSuccessData: sse_decode_bool,
           decodeErrorData: sse_decode_core_error,
         ),
         constMeta: kCrateApiFalaaiCoreProcessPrekeyBundleConstMeta,
@@ -575,7 +635,7 @@ class FalaaiCoreLibApiImpl extends FalaaiCoreLibApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 11,
+            funcId: 12,
             port: port_,
           );
         },
@@ -594,6 +654,84 @@ class FalaaiCoreLibApiImpl extends FalaaiCoreLibApiImplPlatform
       const TaskConstMeta(
         debugName: "FalaaiCore_received_messages",
         argNames: ["that", "after", "limit"],
+      );
+
+  @override
+  Future<SafetyNumber> crateApiFalaaiCoreSafetyNumber({
+    required FalaaiCore that,
+    required DeviceAddress peer,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFalaaiCore(
+            that,
+            serializer,
+          );
+          sse_encode_box_autoadd_device_address(peer, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 13,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_safety_number,
+          decodeErrorData: sse_decode_core_error,
+        ),
+        constMeta: kCrateApiFalaaiCoreSafetyNumberConstMeta,
+        argValues: [that, peer],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiFalaaiCoreSafetyNumberConstMeta =>
+      const TaskConstMeta(
+        debugName: "FalaaiCore_safety_number",
+        argNames: ["that", "peer"],
+      );
+
+  @override
+  Future<bool> crateApiFalaaiCoreSafetyNumberMatches({
+    required FalaaiCore that,
+    required DeviceAddress peer,
+    required List<int> scannedQr,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFalaaiCore(
+            that,
+            serializer,
+          );
+          sse_encode_box_autoadd_device_address(peer, serializer);
+          sse_encode_list_prim_u_8_loose(scannedQr, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 14,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_bool,
+          decodeErrorData: sse_decode_core_error,
+        ),
+        constMeta: kCrateApiFalaaiCoreSafetyNumberMatchesConstMeta,
+        argValues: [that, peer, scannedQr],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiFalaaiCoreSafetyNumberMatchesConstMeta =>
+      const TaskConstMeta(
+        debugName: "FalaaiCore_safety_number_matches",
+        argNames: ["that", "peer", "scannedQr"],
       );
 
   @override
@@ -617,7 +755,7 @@ class FalaaiCoreLibApiImpl extends FalaaiCoreLibApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 12,
+            funcId: 15,
             port: port_,
           );
         },
@@ -656,7 +794,7 @@ class FalaaiCoreLibApiImpl extends FalaaiCoreLibApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 13,
+            funcId: 16,
             port: port_,
           );
         },
@@ -678,6 +816,46 @@ class FalaaiCoreLibApiImpl extends FalaaiCoreLibApiImplPlatform
       );
 
   @override
+  Future<void> crateApiFalaaiCoreSetIdentityVerified({
+    required FalaaiCore that,
+    required DeviceAddress peer,
+    required bool verified,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerFalaaiCore(
+            that,
+            serializer,
+          );
+          sse_encode_box_autoadd_device_address(peer, serializer);
+          sse_encode_bool(verified, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 17,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_core_error,
+        ),
+        constMeta: kCrateApiFalaaiCoreSetIdentityVerifiedConstMeta,
+        argValues: [that, peer, verified],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiFalaaiCoreSetIdentityVerifiedConstMeta =>
+      const TaskConstMeta(
+        debugName: "FalaaiCore_set_identity_verified",
+        argNames: ["that", "peer", "verified"],
+      );
+
+  @override
   Future<void> crateApiFalaaiCoreSetLocalAddress({
     required FalaaiCore that,
     required DeviceAddress address,
@@ -694,7 +872,7 @@ class FalaaiCoreLibApiImpl extends FalaaiCoreLibApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 14,
+            funcId: 18,
             port: port_,
           );
         },
@@ -732,7 +910,7 @@ class FalaaiCoreLibApiImpl extends FalaaiCoreLibApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 15,
+            funcId: 19,
             port: port_,
           );
         },
@@ -762,7 +940,7 @@ class FalaaiCoreLibApiImpl extends FalaaiCoreLibApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 16,
+            funcId: 20,
             port: port_,
           );
         },
@@ -894,6 +1072,7 @@ class FalaaiCoreLibApiImpl extends FalaaiCoreLibApiImplPlatform
           id: dco_decode_i_64(raw[1]),
           from: dco_decode_box_autoadd_device_address(raw[2]),
           body: dco_decode_list_prim_u_8_strict(raw[3]),
+          identityChanged: dco_decode_bool(raw[4]),
         );
       case 1:
         return ChatEvent_MessageSent(
@@ -946,6 +1125,12 @@ class FalaaiCoreLibApiImpl extends FalaaiCoreLibApiImplPlatform
   PlatformInt64 dco_decode_i_64(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return dcoDecodeI64(raw);
+  }
+
+  @protected
+  IdentityStatus dco_decode_identity_status(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return IdentityStatus.values[raw as int];
   }
 
   @protected
@@ -1021,13 +1206,26 @@ class FalaaiCoreLibApiImpl extends FalaaiCoreLibApiImplPlatform
   ReceivedMessage dco_decode_received_message(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 4)
-      throw Exception('unexpected arr length: expect 4 but see ${arr.length}');
+    if (arr.length != 5)
+      throw Exception('unexpected arr length: expect 5 but see ${arr.length}');
     return ReceivedMessage(
       id: dco_decode_i_64(arr[0]),
       from: dco_decode_device_address(arr[1]),
       serverTimestamp: dco_decode_u_64(arr[2]),
       body: dco_decode_list_prim_u_8_strict(arr[3]),
+      identityChanged: dco_decode_bool(arr[4]),
+    );
+  }
+
+  @protected
+  SafetyNumber dco_decode_safety_number(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 2)
+      throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
+    return SafetyNumber(
+      digits: dco_decode_String(arr[0]),
+      qr: dco_decode_list_prim_u_8_strict(arr[1]),
     );
   }
 
@@ -1216,10 +1414,12 @@ class FalaaiCoreLibApiImpl extends FalaaiCoreLibApiImplPlatform
         var var_id = sse_decode_i_64(deserializer);
         var var_from = sse_decode_box_autoadd_device_address(deserializer);
         var var_body = sse_decode_list_prim_u_8_strict(deserializer);
+        var var_identityChanged = sse_decode_bool(deserializer);
         return ChatEvent_MessageReceived(
           id: var_id,
           from: var_from,
           body: var_body,
+          identityChanged: var_identityChanged,
         );
       case 1:
         var var_clientMessageId = sse_decode_list_prim_u_8_strict(deserializer);
@@ -1268,6 +1468,13 @@ class FalaaiCoreLibApiImpl extends FalaaiCoreLibApiImplPlatform
   PlatformInt64 sse_decode_i_64(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return deserializer.buffer.getPlatformInt64();
+  }
+
+  @protected
+  IdentityStatus sse_decode_identity_status(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var inner = sse_decode_i_32(deserializer);
+    return IdentityStatus.values[inner];
   }
 
   @protected
@@ -1381,12 +1588,22 @@ class FalaaiCoreLibApiImpl extends FalaaiCoreLibApiImplPlatform
     var var_from = sse_decode_device_address(deserializer);
     var var_serverTimestamp = sse_decode_u_64(deserializer);
     var var_body = sse_decode_list_prim_u_8_strict(deserializer);
+    var var_identityChanged = sse_decode_bool(deserializer);
     return ReceivedMessage(
       id: var_id,
       from: var_from,
       serverTimestamp: var_serverTimestamp,
       body: var_body,
+      identityChanged: var_identityChanged,
     );
+  }
+
+  @protected
+  SafetyNumber sse_decode_safety_number(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_digits = sse_decode_String(deserializer);
+    var var_qr = sse_decode_list_prim_u_8_strict(deserializer);
+    return SafetyNumber(digits: var_digits, qr: var_qr);
   }
 
   @protected
@@ -1584,11 +1801,13 @@ class FalaaiCoreLibApiImpl extends FalaaiCoreLibApiImplPlatform
         id: final id,
         from: final from,
         body: final body,
+        identityChanged: final identityChanged,
       ):
         sse_encode_i_32(0, serializer);
         sse_encode_i_64(id, serializer);
         sse_encode_box_autoadd_device_address(from, serializer);
         sse_encode_list_prim_u_8_strict(body, serializer);
+        sse_encode_bool(identityChanged, serializer);
       case ChatEvent_MessageSent(clientMessageId: final clientMessageId):
         sse_encode_i_32(1, serializer);
         sse_encode_list_prim_u_8_strict(clientMessageId, serializer);
@@ -1631,6 +1850,15 @@ class FalaaiCoreLibApiImpl extends FalaaiCoreLibApiImplPlatform
   void sse_encode_i_64(PlatformInt64 self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     serializer.buffer.putPlatformInt64(self);
+  }
+
+  @protected
+  void sse_encode_identity_status(
+    IdentityStatus self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.index, serializer);
   }
 
   @protected
@@ -1740,6 +1968,14 @@ class FalaaiCoreLibApiImpl extends FalaaiCoreLibApiImplPlatform
     sse_encode_device_address(self.from, serializer);
     sse_encode_u_64(self.serverTimestamp, serializer);
     sse_encode_list_prim_u_8_strict(self.body, serializer);
+    sse_encode_bool(self.identityChanged, serializer);
+  }
+
+  @protected
+  void sse_encode_safety_number(SafetyNumber self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.digits, serializer);
+    sse_encode_list_prim_u_8_strict(self.qr, serializer);
   }
 
   @protected
@@ -1895,8 +2131,22 @@ class FalaaiCoreImpl extends RustOpaque implements FalaaiCore {
   Future<AccountKeys> generateAccountKeys() => FalaaiCoreLib.instance.api
       .crateApiFalaaiCoreGenerateAccountKeys(that: this);
 
+  /// Situação da identidade da conta de `peer` frente ao que o usuário verificou.
+  Future<IdentityStatus> identityStatus({required DeviceAddress peer}) =>
+      FalaaiCoreLib.instance.api.crateApiFalaaiCoreIdentityStatus(
+        that: this,
+        peer: peer,
+      );
+
   /// Abre sessão com `peer` a partir do bundle de pré-chaves que ele publicou (PQXDH).
-  Future<void> processPrekeyBundle({
+  /// Devolve `true` se a chave de identidade do bundle é outra que não a conhecida para a
+  /// conta de `peer`: a troca foi aceita e o app mostra o aviso de código de segurança novo.
+  ///
+  /// Em conversa verificada ([`Self::set_identity_verified`]), uma chave diferente da
+  /// verificada falha com [`CoreError::UntrustedIdentity`] sem abrir sessão; a chave nova fica
+  /// registrada, então [`Self::safety_number`] já mostra o código novo e
+  /// [`Self::identity_status`] fica [`IdentityStatus::Changed`] até o usuário agir.
+  Future<bool> processPrekeyBundle({
     required DeviceAddress peer,
     required PreKeyBundle bundle,
   }) => FalaaiCoreLib.instance.api.crateApiFalaaiCoreProcessPrekeyBundle(
@@ -1919,6 +2169,29 @@ class FalaaiCoreImpl extends RustOpaque implements FalaaiCore {
     that: this,
     after: after,
     limit: limit,
+  );
+
+  /// Código de segurança da conversa com a conta de `peer`, com a chave de identidade
+  /// conhecida para ela (a última vista num bundle ou numa mensagem). Os dois aparelhos
+  /// mostram os mesmos 60 dígitos; cada um mostra seu QR para o outro ler. Exige a conta
+  /// ([`CoreError::NoAccount`]) e alguma chave do contato ([`CoreError::UnknownIdentity`]).
+  Future<SafetyNumber> safetyNumber({required DeviceAddress peer}) =>
+      FalaaiCoreLib.instance.api.crateApiFalaaiCoreSafetyNumber(
+        that: this,
+        peer: peer,
+      );
+
+  /// `true` se `scanned_qr`, lido do QR que o aparelho de `peer` mostra, é o código de
+  /// segurança desta conversa: as identidades dos dois lados batem. Falha com
+  /// [`CoreError::InvalidSafetyNumber`] se o QR não for um código de segurança. Conferir não
+  /// marca a conversa como verificada: isso é [`Self::set_identity_verified`].
+  Future<bool> safetyNumberMatches({
+    required DeviceAddress peer,
+    required List<int> scannedQr,
+  }) => FalaaiCoreLib.instance.api.crateApiFalaaiCoreSafetyNumberMatches(
+    that: this,
+    peer: peer,
+    scannedQr: scannedQr,
   );
 
   /// Envia a `peer` um envelope de [`Self::encrypt`], identificado por `client_message_id`
@@ -1958,6 +2231,21 @@ class FalaaiCoreImpl extends RustOpaque implements FalaaiCore {
     that: this,
     peer: peer,
     body: body,
+  );
+
+  /// Marca a chave de identidade atual da conta de `peer` como verificada pelo usuário
+  /// (`true`), depois de ele conferir o código de segurança; ou desfaz a verificação
+  /// (`false`). A verificação vale para aquela chave: se ela mudar, a conversa passa a
+  /// [`IdentityStatus::Changed`] e o envio é bloqueado até chamar de novo com `true` (a chave
+  /// nova foi conferida) ou `false` (a troca foi aceita sem conferir). Verificar exige alguma
+  /// chave do contato ([`CoreError::UnknownIdentity`]).
+  Future<void> setIdentityVerified({
+    required DeviceAddress peer,
+    required bool verified,
+  }) => FalaaiCoreLib.instance.api.crateApiFalaaiCoreSetIdentityVerified(
+    that: this,
+    peer: peer,
+    verified: verified,
   );
 
   /// Grava o endereço que o servidor atribuiu a este dispositivo no registro e libera as

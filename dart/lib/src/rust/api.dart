@@ -85,6 +85,9 @@ abstract class FalaaiCore implements RustOpaqueInterface {
   /// para o registro no servidor. Falha com [`CoreError::AccountExists`] se já foram geradas.
   Future<AccountKeys> generateAccountKeys();
 
+  /// Situação da identidade da conta de `peer` frente ao que o usuário verificou.
+  Future<IdentityStatus> identityStatus({required DeviceAddress peer});
+
   /// Abre (ou cria) o banco local em `db_path` com a chave de 32 bytes guardada pela
   /// plataforma. `trust_root` é a chave pública raiz do servidor, da configuração do app
   /// (33 bytes, formato da libsignal): só certificados de remetente que encadeiam até ela são
@@ -100,7 +103,14 @@ abstract class FalaaiCore implements RustOpaqueInterface {
   );
 
   /// Abre sessão com `peer` a partir do bundle de pré-chaves que ele publicou (PQXDH).
-  Future<void> processPrekeyBundle({
+  /// Devolve `true` se a chave de identidade do bundle é outra que não a conhecida para a
+  /// conta de `peer`: a troca foi aceita e o app mostra o aviso de código de segurança novo.
+  ///
+  /// Em conversa verificada ([`Self::set_identity_verified`]), uma chave diferente da
+  /// verificada falha com [`CoreError::UntrustedIdentity`] sem abrir sessão; a chave nova fica
+  /// registrada, então [`Self::safety_number`] já mostra o código novo e
+  /// [`Self::identity_status`] fica [`IdentityStatus::Changed`] até o usuário agir.
+  Future<bool> processPrekeyBundle({
     required DeviceAddress peer,
     required PreKeyBundle bundle,
   });
@@ -115,6 +125,21 @@ abstract class FalaaiCore implements RustOpaqueInterface {
   Future<List<ReceivedMessage>> receivedMessages({
     required PlatformInt64 after,
     required int limit,
+  });
+
+  /// Código de segurança da conversa com a conta de `peer`, com a chave de identidade
+  /// conhecida para ela (a última vista num bundle ou numa mensagem). Os dois aparelhos
+  /// mostram os mesmos 60 dígitos; cada um mostra seu QR para o outro ler. Exige a conta
+  /// ([`CoreError::NoAccount`]) e alguma chave do contato ([`CoreError::UnknownIdentity`]).
+  Future<SafetyNumber> safetyNumber({required DeviceAddress peer});
+
+  /// `true` se `scanned_qr`, lido do QR que o aparelho de `peer` mostra, é o código de
+  /// segurança desta conversa: as identidades dos dois lados batem. Falha com
+  /// [`CoreError::InvalidSafetyNumber`] se o QR não for um código de segurança. Conferir não
+  /// marca a conversa como verificada: isso é [`Self::set_identity_verified`].
+  Future<bool> safetyNumberMatches({
+    required DeviceAddress peer,
+    required List<int> scannedQr,
   });
 
   /// Envia a `peer` um envelope de [`Self::encrypt`], identificado por `client_message_id`
@@ -145,6 +170,17 @@ abstract class FalaaiCore implements RustOpaqueInterface {
   Future<Uint8List> sendMessage({
     required DeviceAddress peer,
     required List<int> body,
+  });
+
+  /// Marca a chave de identidade atual da conta de `peer` como verificada pelo usuário
+  /// (`true`), depois de ele conferir o código de segurança; ou desfaz a verificação
+  /// (`false`). A verificação vale para aquela chave: se ela mudar, a conversa passa a
+  /// [`IdentityStatus::Changed`] e o envio é bloqueado até chamar de novo com `true` (a chave
+  /// nova foi conferida) ou `false` (a troca foi aceita sem conferir). Verificar exige alguma
+  /// chave do contato ([`CoreError::UnknownIdentity`]).
+  Future<void> setIdentityVerified({
+    required DeviceAddress peer,
+    required bool verified,
   });
 
   /// Grava o endereço que o servidor atribuiu a este dispositivo no registro e libera as
