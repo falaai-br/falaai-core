@@ -26,11 +26,15 @@ PROTOC_OS   := $(subst Darwin,osx,$(subst Linux,linux,$(shell uname -s)))
 PROTOC_ARCH := $(subst arm64,aarch_64,$(subst aarch64,aarch_64,$(shell uname -m)))
 PROTOC_PLATFORM := $(PROTOC_OS)-$(PROTOC_ARCH)
 
+# Checkouts usados por 'make test-e2e', ao lado deste repositório por padrão.
+FALAAI_SERVER_DIR ?= ../falaai-server
+FALAAI_SIGNER_DIR ?= ../falaai-signer
+
 ANDROID_ABIS := arm64-v8a armeabi-v7a x86_64
 # Meta de tamanho do core por ABI Android (blueprint: APK de entrada < 40 MB por ABI).
 MOBILE_SIZE_LIMIT ?= 10485760
 
-.PHONY: tools protoc fmt lint test test-integration vectors security build build-mobile build-android build-ios mobile-size bindings bindings-check bindings-verify check check-fast
+.PHONY: tools protoc fmt lint test test-integration test-e2e vectors security build build-mobile build-android build-ios mobile-size bindings bindings-check bindings-verify check check-fast
 tools: hooks protoc ## Instala toolchain e ferramentas pinadas e ativa os hooks
 	@command -v rustup >/dev/null || { echo "instale rustup: https://rustup.rs"; exit 1; }
 	rustup show active-toolchain
@@ -68,6 +72,9 @@ test: ## Testes unitários
 
 test-integration: ## Testes de integração (dois cores trocando mensagens, SQLCipher real)
 	cargo test --test '*' --locked
+
+test-e2e: ## E2E headless da Fase 0 contra o falaai-server real no Docker (fora do make check)
+	FALAAI_SERVER_DIR=$(FALAAI_SERVER_DIR) FALAAI_SIGNER_DIR=$(FALAAI_SIGNER_DIR) scripts/e2e
 
 vectors: ## Regera os vetores de envelope em vectors/envelope/; revise o diff antes de versionar
 	FALAAI_UPDATE_VECTORS=1 cargo test --test envelope_vectors --locked

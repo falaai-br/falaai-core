@@ -1,0 +1,13 @@
+# Sobreposição ao compose.yaml do falaai-server para o E2E headless (scripts/e2e). Projeto
+# próprio (falaai-e2e), sem portas do Postgres e do Redis no host e com o servidor numa porta
+# alta, para não brigar com o ambiente de dev nem com outros stacks da máquina.
+services:
+  postgres:
+    ports: !reset []
+    # Banco descartável: cada execução começa do zero.
+    volumes: !reset []
+  redis:
+    ports: !reset []
+  server:
+    ports: !override
+      - "127.0.0.1:${FALAAI_E2E_PORT:-18080}:8080"

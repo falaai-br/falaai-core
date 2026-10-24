@@ -1,0 +1,53 @@
+#!/bin/sh
+# E2E headless da Fase 0 (flc-uf0). Sobe o falaai-server com o falaai-signer, o Postgres e o
+# Redis pelo compose.yaml do servidor, num projeto próprio (falaai-e2e) com as portas de
+# tests/e2e/compose.yaml, e roda tests/e2e_phase0.rs contra ele. Começa e termina com o stack
+# e os volumes apagados.
+# Uso: scripts/e2e. Variáveis: FALAAI_SERVER_DIR e FALAAI_SIGNER_DIR (checkouts, padrão ao lado
+# deste repositório), FALAAI_E2E_PORT (padrão 18080), FALAAI_E2E_KEEP=1 (não derruba no fim),
+# FALAAI_E2E_REQUIRE_UNIDENTIFIED=1 (falha se o servidor não tiver o socket não autenticado).
+set -eu
+root=$(cd "$(dirname "$0")/.." && pwd)
+server_dir=${FALAAI_SERVER_DIR:-$root/../falaai-server}
+signer_dir=${FALAAI_SIGNER_DIR:-$root/../falaai-signer}
+[ -f "$server_dir/compose.yaml" ] || { echo "falaai-server não encontrado em $server_dir (FALAAI_SERVER_DIR)" >&2; exit 2; }
+[ -f "$signer_dir/Cargo.toml" ] || { echo "falaai-signer não encontrado em $signer_dir (FALAAI_SIGNER_DIR)" >&2; exit 2; }
+command -v docker >/dev/null || { echo "instale o Docker com o compose v2.24+" >&2; exit 2; }
+
+server_dir=$(cd "$server_dir" && pwd)
+FALAAI_SIGNER_DIR=$(cd "$signer_dir" && pwd)
+FALAAI_E2E_PORT=${FALAAI_E2E_PORT:-18080}
+export FALAAI_SIGNER_DIR FALAAI_E2E_PORT
+
+compose() {
+  docker compose -p falaai-e2e -f "$server_dir/compose.yaml" -f "$root/tests/e2e/compose.yaml" \
+    --profile signer "$@"
+}
+down() { compose down -v --remove-orphans >/dev/null 2>&1 || true; }
+finish() {
+  status=$?
+  if [ "$status" != 0 ]; then compose logs --no-color --tail 50 server signer >&2 || true; fi
+  if [ "${FALAAI_E2E_KEEP:-0}" = 1 ]; then echo "stack mantido: docker compose -p falaai-e2e down -v"; else down; fi
+  exit "$status"
+}
+
+down
+trap finish EXIT
+trap 'exit 130' INT TERM
+compose up -d --build --wait
+
+url="http://127.0.0.1:$FALAAI_E2E_PORT"
+# O signer sobe depois do servidor, na rede dele: espera o trust root sair.
+tries=0
+until FALAAI_E2E_TRUST_ROOT=$(compose exec -T server /falaai-server trust-root 2>/dev/null) \
+  && curl -fsS "$url/readyz" >/dev/null 2>&1; do
+  tries=$((tries + 1))
+  [ "$tries" -lt 60 ] || { echo "servidor ou signer não ficaram prontos" >&2; exit 1; }
+  sleep 1
+done
+FALAAI_E2E_POSTGRES=$(compose ps -q postgres)
+FALAAI_E2E_URL=$url
+export FALAAI_E2E_URL FALAAI_E2E_TRUST_ROOT FALAAI_E2E_POSTGRES
+
+cd "$root"
+cargo test --locked --test e2e_phase0 -- --ignored --nocapture
