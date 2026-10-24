@@ -18,7 +18,7 @@ Não existe CI remoto (ADR-0009). O pipeline roda nos git hooks e no Refinery do
 
 - Ao entrar em um clone novo: `make tools` (instala ferramentas pinadas e ativa os hooks).
 - `pre-commit` roda `make check-fast`; `commit-msg` exige Conventional Commits; `pre-push` roda `make check`.
-- `make check` = `lint` + `test` + `test-integration` + `security` + `build`. Precisa estar verde antes de `gt done`.
+- `make check` = `lint` + `bindings-verify` + `test` + `test-integration` + `security` + `build`. Precisa estar verde antes de `gt done`. `bindings-verify` regera a ponte do flutter_rust_bridge e falha se ela não bate com `src/api`; exige `dart` no PATH (sem ele, só avisa).
 - Nunca use `--no-verify` nem `FALAAI_SKIP_HOOKS=1` para contornar uma falha. Corrija a causa.
 - Toda mudança de comportamento vem com teste. Bug corrigido vem com teste de regressão.
 
@@ -38,5 +38,5 @@ Não existe CI remoto (ADR-0009). O pipeline roda nos git hooks e no Refinery do
 
 - Rust só existe aqui (ADR-0002). Mantenha o crate pequeno: wrapper de protocolo, stores, storage, messaging, transport, media, api.
 - Material de chave nunca atravessa o FFI para o Dart.
-- Use `zeroize` em todo buffer com segredo. `unsafe` é proibido (lint `unsafe_code = deny`).
+- Use `zeroize` em todo buffer com segredo. `unsafe` é proibido (lint `unsafe_code = deny`). A única exceção é `src/frb_generated.rs`, gerado por `make bindings`: exportar funções C exige `#[unsafe(no_mangle)]`, então o `allow(unsafe_code)` fica só nesse módulo, em `src/lib.rs`. Código escrito à mão nunca leva `unsafe`, nem dentro de `frb_generated`.
 - Builds para Android e iOS: `make build-mobile` (fora do hook, exigido nas beads de build).

@@ -30,7 +30,7 @@ ANDROID_ABIS := arm64-v8a armeabi-v7a x86_64
 # Meta de tamanho do core por ABI Android (blueprint: APK de entrada < 40 MB por ABI).
 MOBILE_SIZE_LIMIT ?= 10485760
 
-.PHONY: tools protoc fmt lint test test-integration vectors security build build-mobile build-android build-ios mobile-size bindings bindings-check check check-fast
+.PHONY: tools protoc fmt lint test test-integration vectors security build build-mobile build-android build-ios mobile-size bindings bindings-check bindings-verify check check-fast
 tools: hooks protoc ## Instala toolchain e ferramentas pinadas e ativa os hooks
 	@command -v rustup >/dev/null || { echo "instale rustup: https://rustup.rs"; exit 1; }
 	rustup show active-toolchain
@@ -115,9 +115,15 @@ bindings: ## Regera a ponte flutter_rust_bridge (src/frb_generated.rs e dart/lib
 bindings-check: bindings ## Falha se a ponte versionada não bate com src/api
 	@test -z "$$(git status --porcelain -- src/frb_generated.rs dart/lib)" || { git status --short -- src/frb_generated.rs dart/lib; echo "ponte desatualizada: rode 'make bindings' e versione o resultado"; exit 1; }
 
+# O codegen precisa do Dart. Onde ele não existe, o gate avisa e segue, em vez de barrar quem não
+# mexe na ponte; na máquina do Gas Town o Dart está no PATH e o gate vale.
+bindings-verify: ## Em 'make check': bindings-check se houver dart no PATH; sem ele, só avisa
+	@if command -v dart >/dev/null; then $(MAKE) bindings-check; else \
+	  echo "AVISO: dart fora do PATH; ponte flutter_rust_bridge não conferida com src/api (make bindings-check)" >&2; fi
+
 check-fast: ## pre-commit
 	cargo fmt --all -- --check
 	cargo clippy --lib --locked -- -D warnings
 	$(GITLEAKS) git --no-banner --redact --staged .
 
-check: lint test test-integration security build ## pre-push e gate do Refinery
+check: lint bindings-verify test test-integration security build ## pre-push e gate do Refinery
