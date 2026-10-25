@@ -213,13 +213,17 @@ impl Device {
     }
 
     /// Próxima mensagem que chegar no stream de eventos em até `timeout`, com o remetente.
+    /// Recibos e avisos de digitação que cheguem antes são pulados.
     pub fn next_message(
         &self,
         timeout: Duration,
     ) -> Result<(DeviceAddress, Vec<u8>), Box<dyn Error>> {
-        match self.next_event(timeout)? {
-            ChatEvent::MessageReceived { from, body, .. } => Ok((from, body)),
-            other => Err(format!("esperava mensagem, veio {other:?}").into()),
+        loop {
+            match self.next_event(timeout)? {
+                ChatEvent::MessageReceived { from, body, .. } => return Ok((from, body)),
+                ChatEvent::ReceiptReceived { .. } | ChatEvent::Typing { .. } => {}
+                other => return Err(format!("esperava mensagem, veio {other:?}").into()),
+            }
         }
     }
 

@@ -8,7 +8,9 @@ import 'api/types.dart';
 import 'frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `attempt`, `block_on`, `classify`, `disposition`, `lock`, `notify`, `receive`, `subscribe`, `transmit`, `transport`, `wake_courier`, `with_sessions`, `with_sessions`
+// These functions are ignored because they are not marked as `pub`: `attempt`, `block_on`, `classify`, `disposition`, `encrypt_content`, `lock`, `notify`, `receive`, `receiver`, `store`, `subscribe`, `transmit`, `transport`, `wake_courier`, `with_sessions`, `with_sessions`
+// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `Received`, `Receiver`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`
 
 /// Gera a chave de 32 bytes do banco local com o CSPRNG do Rust, para a primeira abertura. Não
 /// precisa de núcleo aberto. O app guarda os bytes no Keychain/Keystore, sem cópia em outro lugar,
@@ -39,16 +41,23 @@ abstract class FalaaiCore implements RustOpaqueInterface {
   /// volta a esvaziá-la a cada reconexão.
   Future<void> connect({required ServerConfig server, required String token});
 
-  /// Abre e decifra um envelope selado, grava a mensagem no banco local e entrega o texto, com o
-  /// remetente tirado do certificado, no stream de [`Self::events`] como
-  /// [`ChatEvent::MessageReceived`]. `client_message_id` e `server_timestamp` vêm do `Deliver`
+  /// Abre e decifra um envelope selado e trata o conteúdo conforme o tipo, com o remetente
+  /// tirado do certificado. `client_message_id` e `server_timestamp` vêm do `Deliver`
   /// (milissegundos desde a época Unix): o certificado de remetente tem de valer nesse instante,
-  /// então uma mensagem que esperou na fila ainda abre. `Ok` quer dizer que a mensagem foi
-  /// gravada e o evento entregue, e o envelope pode ser confirmado ao servidor.
+  /// então uma mensagem que esperou na fila ainda abre. `Ok` quer dizer que o envelope foi
+  /// consumido e pode ser confirmado ao servidor.
   ///
-  /// Um reenvio de mensagem já gravada (mesmo remetente e mesmo `client_message_id`, que não
-  /// pode ser vazio para isso) avança o ratchet, mas não grava nem emite evento: falha com
-  /// [`CoreError::DuplicateMessage`], como o mesmo envelope decifrado duas vezes.
+  /// - Texto: gravado no banco local e entregue no stream de [`Self::events`] como
+  ///   [`ChatEvent::MessageReceived`]; na mesma transação, um recibo de entrega para o
+  ///   remetente entra na outbox (se o envelope tem `client_message_id`).
+  /// - Recibo: gravado e entregue como [`ChatEvent::ReceiptReceived`]. Com recibos de leitura
+  ///   desligados, um recibo de leitura é descartado: nada gravado, nenhum evento.
+  /// - Digitação: só [`ChatEvent::Typing`], nunca gravado; sem assinante, some.
+  ///
+  /// Um reenvio de mensagem ou recibo já gravado (mesmo remetente e mesmo `client_message_id`,
+  /// que não pode ser vazio para isso) avança o ratchet, mas não grava nem emite evento: falha
+  /// com [`CoreError::DuplicateMessage`], como o mesmo envelope decifrado duas vezes. Conteúdo
+  /// que não se lê falha com [`CoreError::InvalidMessage`].
   ///
   /// Decifrar, gravar e entregar são atômicos: sem assinante, ou com o stream fechado na
   /// entrega, falha com [`CoreError::NoEventListener`], nada é gravado e o ratchet não avança,
@@ -65,8 +74,9 @@ abstract class FalaaiCore implements RustOpaqueInterface {
   /// efeito se não houver conexão.
   Future<void> disconnect();
 
-  /// Cifra `plaintext` para `peer` e sela com o certificado de remetente; o resultado vai em
-  /// `Envelope.content`. Exige sessão aberta e certificado de remetente válido.
+  /// Cifra o texto `plaintext` para `peer` e sela com o certificado de remetente; o resultado
+  /// vai em `Envelope.content`, com o tipo `MESSAGE`. Exige sessão aberta e certificado de
+  /// remetente válido.
   Future<Envelope> encrypt({
     required DeviceAddress peer,
     required List<int> plaintext,
@@ -87,6 +97,14 @@ abstract class FalaaiCore implements RustOpaqueInterface {
 
   /// Situação da identidade da conta de `peer` frente ao que o usuário verificou.
   Future<IdentityStatus> identityStatus({required DeviceAddress peer});
+
+  /// Envia recibo de leitura pelas mensagens recebidas `message_ids` (os ids de
+  /// [`ReceivedMessage::id`]), um recibo por remetente, pela outbox como
+  /// [`Self::send_message`]: funciona sem conexão e sai quando houver. Com recibos de leitura
+  /// desligados não faz nada. Ids inexistentes e mensagens sem `client_message_id` são
+  /// ignorados; o app decide quando uma mensagem conta como lida e não chama duas vezes pela
+  /// mesma.
+  Future<void> markRead({required Int64List messageIds});
 
   /// Abre (ou cria) o banco local em `db_path` com a chave de 32 bytes guardada pela
   /// plataforma. `trust_root` é a chave pública raiz do servidor, da configuração do app
@@ -115,6 +133,9 @@ abstract class FalaaiCore implements RustOpaqueInterface {
     required PreKeyBundle bundle,
   });
 
+  /// Se os recibos de leitura estão ligados ([`Self::set_read_receipts`]).
+  Future<bool> readReceipts();
+
   /// Até `limit` mensagens recebidas com id maior que `after`, em ordem de id: as que este
   /// processo entregou em [`ChatEvent::MessageReceived`] e as que o outro (a extensão de
   /// notificação) decifrou e gravou. Comece com `after = 0` e passe o id da última lida.
@@ -123,6 +144,14 @@ abstract class FalaaiCore implements RustOpaqueInterface {
   /// o id de um evento não serve de cursor: a extensão pode ter gravado ids menores ainda não
   /// lidos. Mensagens já recebidas por evento voltam aqui; o app deduplica pelo id.
   Future<List<ReceivedMessage>> receivedMessages({
+    required PlatformInt64 after,
+    required int limit,
+  });
+
+  /// Até `limit` recibos recebidos com id maior que `after`, em ordem de id, como
+  /// [`Self::received_messages`] para as mensagens: cursor próprio, com os que este processo
+  /// entregou em [`ChatEvent::ReceiptReceived`] e os que a extensão de notificação gravou.
+  Future<List<ReceivedReceipt>> receivedReceipts({
     required PlatformInt64 after,
     required int limit,
   });
@@ -172,6 +201,12 @@ abstract class FalaaiCore implements RustOpaqueInterface {
     required List<int> body,
   });
 
+  /// Avisa `peer` que este aparelho começou (`started`) ou parou de digitar. Efêmero: não
+  /// passa pela outbox nem pelo banco; cifra e envia na hora pelo transporte, ou falha
+  /// ([`CoreError::NotConnected`], [`CoreError::Network`]…) e o app simplesmente não insiste.
+  /// Exige sessão aberta e certificado de remetente válido, como [`Self::encrypt`].
+  Future<void> sendTyping({required DeviceAddress peer, required bool started});
+
   /// Marca a chave de identidade atual da conta de `peer` como verificada pelo usuário
   /// (`true`), depois de ele conferir o código de segurança; ou desfaz a verificação
   /// (`false`). A verificação vale para aquela chave: se ela mudar, a conversa passa a
@@ -187,6 +222,12 @@ abstract class FalaaiCore implements RustOpaqueInterface {
   /// sessões. Exige [`Self::generate_account_keys`] antes; repetir o mesmo endereço não muda
   /// nada.
   Future<void> setLocalAddress({required DeviceAddress address});
+
+  /// Liga ou desliga os recibos de leitura, nos dois sentidos: desligado, [`Self::mark_read`]
+  /// não envia nada e os recibos de leitura que chegam são descartados. Fica no banco local,
+  /// valendo para o app e a extensão de notificação. Ligado por padrão. Recibos de entrega
+  /// não têm opção.
+  Future<void> setReadReceipts({required bool enabled});
 
   /// Entrega o certificado de remetente que o `accounts` emitiu para este dispositivo. Ele vale
   /// pouco tempo (24h) e fica só em memória: o app o guarda, entrega de novo ao abrir o núcleo e

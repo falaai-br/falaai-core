@@ -349,18 +349,22 @@ impl<'a> Client<'a> {
         }
     }
 
-    /// A próxima mensagem do stream de eventos é `text`, de `from`.
+    /// A próxima mensagem do stream de eventos é `text`, de `from`. O recibo de entrega que o
+    /// outro lado manda por uma mensagem anterior pode chegar antes; é pulado.
     fn expect_message(&self, from: &Client<'_>, text: &[u8]) -> TestResult {
-        match self.events.recv_timeout(WAIT)? {
-            ChatEvent::MessageReceived {
-                from: sender, body, ..
-            } => {
-                assert!(sender == from.address, "remetente errado no evento");
-                assert_eq!(body, text);
+        loop {
+            match self.events.recv_timeout(WAIT)? {
+                ChatEvent::MessageReceived {
+                    from: sender, body, ..
+                } => {
+                    assert!(sender == from.address, "remetente errado no evento");
+                    assert_eq!(body, text);
+                    return Ok(());
+                }
+                ChatEvent::ReceiptReceived { .. } => {}
+                other => return Err(format!("esperava mensagem, veio {other:?}").into()),
             }
-            other => return Err(format!("esperava mensagem, veio {other:?}").into()),
         }
-        Ok(())
     }
 }
 

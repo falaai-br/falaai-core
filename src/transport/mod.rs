@@ -175,6 +175,8 @@ pub(crate) struct Outgoing {
     pub(crate) destination_aci: [u8; 16],
     pub(crate) destination_device_id: u8,
     pub(crate) client_message_id: Vec<u8>,
+    /// Tipo do envelope, em claro para o servidor decidir o push; nunca `Unspecified`.
+    pub(crate) envelope_type: proto::EnvelopeType,
     /// Mensagem selada.
     pub(crate) content: Vec<u8>,
 }
@@ -235,7 +237,7 @@ impl Transport {
             destination_aci: outgoing.destination_aci.to_vec(),
             destination_device_id: outgoing.destination_device_id.into(),
             envelope: Some(proto::WireEnvelope {
-                r#type: proto::EnvelopeType::Message.into(),
+                r#type: outgoing.envelope_type.into(),
                 client_message_id: outgoing.client_message_id,
                 content: outgoing.content,
             }),

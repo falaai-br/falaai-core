@@ -31,6 +31,15 @@
 //! bloqueia o envio ([`CoreError::UntrustedIdentity`]) em conversa que o usuário marcou como
 //! verificada ([`FalaaiCore::set_identity_verified`]), até ele verificar de novo ou aceitar.
 //!
+//! Recibos e indicador de digitação são mensagens de protocolo: conteúdo E2EE
+//! ([`crate::messaging::content`]) cifrado e selado como qualquer texto. O recibo de entrega
+//! sai sozinho, pela outbox, na mesma transação que grava a mensagem recebida; o de leitura sai
+//! por [`FalaaiCore::mark_read`], só com a opção ligada ([`FalaaiCore::set_read_receipts`]),
+//! e com ela desligada os de leitura que chegam são descartados. Os recibos recebidos ficam no
+//! banco ([`FalaaiCore::received_receipts`]) e chegam como [`ChatEvent::ReceiptReceived`]. A
+//! digitação ([`FalaaiCore::send_typing`]) nunca toca o banco: vai direto pelo transporte ou
+//! não vai, e ao chegar vira [`ChatEvent::Typing`] ou some.
+//!
 //! As funções são síncronas no Rust e o flutter_rust_bridge as roda no seu pool de threads; no
 //! Dart todas devolvem `Future`. Os futuros da libsignal não são `Send` e os stores sobre SQLite
 //! nunca suspendem, então são conduzidos na própria thread por [`block_on`].
@@ -53,21 +62,23 @@ use zeroize::Zeroizing;
 use self::error::CoreError;
 use self::types::{
     AccountKeys, ChatEvent, DeviceAddress, Envelope, IdentityStatus, PreKeyBundle, ReceivedMessage,
-    SafetyNumber, ServerConfig,
+    ReceivedReceipt, SafetyNumber, ServerConfig,
 };
 use crate::frb_generated::StreamSink;
-use crate::messaging::Inbox;
+use crate::messaging::content::{Content, ReceiptType};
 use crate::messaging::outbox::{
-    self, Attempt, AttemptFn, BACKOFF, CLIENT_MESSAGE_ID_LEN, Courier, NotifyFn, Outbox, Outcome,
-    Rejection,
+    self, Attempt, AttemptFn, BACKOFF, CLIENT_MESSAGE_ID_LEN, ClientMessageId, Courier, NotifyFn,
+    Outbox, OutboxKind, Outcome, Rejection, fresh_client_message_id,
 };
+use crate::messaging::{Inbox, Preferences};
 use crate::protocol::access::AccessKey;
 use crate::protocol::certificate::TrustRoot;
 use crate::protocol::identity;
 use crate::protocol::signal::LibsignalSessions;
 use crate::protocol::store::{SqliteStore, SqliteStores};
-use crate::protocol::{self, Address, Sessions};
+use crate::protocol::{self, Address, Decrypted, Sessions};
 use crate::storage::{Database, DatabaseKey};
+use crate::transport::proto::EnvelopeType;
 use crate::transport::{Credentials, Disposition, Incoming, Outgoing, Server, Transport};
 
 /// Gera a chave de 32 bytes do banco local com o CSPRNG do Rust, para a primeira abertura. Não
@@ -84,6 +95,7 @@ pub struct FalaaiCore {
     store: SqliteStore,
     inbox: Inbox,
     outbox: Outbox,
+    preferences: Preferences,
     trust_root: TrustRoot,
     /// Vazio até o endereço local ser conhecido: a libsignal precisa dele nas sessões.
     /// Compartilhado com a thread do socket autenticado, que decifra o que chega.
@@ -118,6 +130,7 @@ impl FalaaiCore {
         let store = SqliteStore::new(db.clone());
         let inbox = Inbox::new(db.clone());
         let outbox = Outbox::new(db.clone());
+        let preferences = Preferences::new(db.clone());
         let sessions = store.local_address()?.map(|local| {
             LibsignalSessions::new(local, trust_root.clone(), SqliteStores::new(db.clone()))
         });
@@ -126,6 +139,7 @@ impl FalaaiCore {
             store,
             inbox,
             outbox,
+            preferences,
             trust_root,
             sessions: Arc::new(Mutex::new(sessions)),
             events: Arc::new(Mutex::new(None)),
@@ -238,26 +252,32 @@ impl FalaaiCore {
         Ok(self.store.set_identity_verified(&peer, verified)?)
     }
 
-    /// Cifra `plaintext` para `peer` e sela com o certificado de remetente; o resultado vai em
-    /// `Envelope.content`. Exige sessão aberta e certificado de remetente válido.
+    /// Cifra o texto `plaintext` para `peer` e sela com o certificado de remetente; o resultado
+    /// vai em `Envelope.content`, com o tipo `MESSAGE`. Exige sessão aberta e certificado de
+    /// remetente válido.
     pub fn encrypt(&self, peer: DeviceAddress, plaintext: Vec<u8>) -> Result<Envelope, CoreError> {
-        let plaintext = Zeroizing::new(plaintext);
+        let content = Content::Text(Zeroizing::new(plaintext));
         let peer = Address::try_from(&peer)?;
-        let envelope =
-            self.with_sessions(|sessions| block_on(sessions.encrypt(&peer, &plaintext)))?;
-        Ok(envelope.into())
+        Ok(self.encrypt_content(&peer, &content)?.into())
     }
 
-    /// Abre e decifra um envelope selado, grava a mensagem no banco local e entrega o texto, com o
-    /// remetente tirado do certificado, no stream de [`Self::events`] como
-    /// [`ChatEvent::MessageReceived`]. `client_message_id` e `server_timestamp` vêm do `Deliver`
+    /// Abre e decifra um envelope selado e trata o conteúdo conforme o tipo, com o remetente
+    /// tirado do certificado. `client_message_id` e `server_timestamp` vêm do `Deliver`
     /// (milissegundos desde a época Unix): o certificado de remetente tem de valer nesse instante,
-    /// então uma mensagem que esperou na fila ainda abre. `Ok` quer dizer que a mensagem foi
-    /// gravada e o evento entregue, e o envelope pode ser confirmado ao servidor.
+    /// então uma mensagem que esperou na fila ainda abre. `Ok` quer dizer que o envelope foi
+    /// consumido e pode ser confirmado ao servidor.
     ///
-    /// Um reenvio de mensagem já gravada (mesmo remetente e mesmo `client_message_id`, que não
-    /// pode ser vazio para isso) avança o ratchet, mas não grava nem emite evento: falha com
-    /// [`CoreError::DuplicateMessage`], como o mesmo envelope decifrado duas vezes.
+    /// - Texto: gravado no banco local e entregue no stream de [`Self::events`] como
+    ///   [`ChatEvent::MessageReceived`]; na mesma transação, um recibo de entrega para o
+    ///   remetente entra na outbox (se o envelope tem `client_message_id`).
+    /// - Recibo: gravado e entregue como [`ChatEvent::ReceiptReceived`]. Com recibos de leitura
+    ///   desligados, um recibo de leitura é descartado: nada gravado, nenhum evento.
+    /// - Digitação: só [`ChatEvent::Typing`], nunca gravado; sem assinante, some.
+    ///
+    /// Um reenvio de mensagem ou recibo já gravado (mesmo remetente e mesmo `client_message_id`,
+    /// que não pode ser vazio para isso) avança o ratchet, mas não grava nem emite evento: falha
+    /// com [`CoreError::DuplicateMessage`], como o mesmo envelope decifrado duas vezes. Conteúdo
+    /// que não se lê falha com [`CoreError::InvalidMessage`].
     ///
     /// Decifrar, gravar e entregar são atômicos: sem assinante, ou com o stream fechado na
     /// entrega, falha com [`CoreError::NoEventListener`], nada é gravado e o ratchet não avança,
@@ -276,7 +296,10 @@ impl FalaaiCore {
             client_message_id: &client_message_id,
             server_timestamp,
         };
-        receive(&self.sessions, &self.inbox, &self.events, incoming)
+        let wake = lock(&self.courier)
+            .as_ref()
+            .map(|courier| courier.wake().clone());
+        self.receiver().receive(incoming, wake.as_ref())
     }
 
     /// `true` se outro processo gravou no banco desde a última chamada ou, na primeira, desde a
@@ -304,6 +327,77 @@ impl FalaaiCore {
         Ok(messages.into_iter().map(ReceivedMessage::from).collect())
     }
 
+    /// Até `limit` recibos recebidos com id maior que `after`, em ordem de id, como
+    /// [`Self::received_messages`] para as mensagens: cursor próprio, com os que este processo
+    /// entregou em [`ChatEvent::ReceiptReceived`] e os que a extensão de notificação gravou.
+    pub fn received_receipts(
+        &self,
+        after: i64,
+        limit: u32,
+    ) -> Result<Vec<ReceivedReceipt>, CoreError> {
+        let receipts = self.inbox.receipts_after(after, limit)?;
+        Ok(receipts.into_iter().map(ReceivedReceipt::from).collect())
+    }
+
+    /// Envia recibo de leitura pelas mensagens recebidas `message_ids` (os ids de
+    /// [`ReceivedMessage::id`]), um recibo por remetente, pela outbox como
+    /// [`Self::send_message`]: funciona sem conexão e sai quando houver. Com recibos de leitura
+    /// desligados não faz nada. Ids inexistentes e mensagens sem `client_message_id` são
+    /// ignorados; o app decide quando uma mensagem conta como lida e não chama duas vezes pela
+    /// mesma.
+    pub fn mark_read(&self, message_ids: Vec<i64>) -> Result<(), CoreError> {
+        if !self.preferences.read_receipts()? {
+            return Ok(());
+        }
+        let groups = self.inbox.senders_of(&message_ids)?;
+        if groups.is_empty() {
+            return Ok(());
+        }
+        for (to, client_message_ids) in groups {
+            let receipt = Content::Receipt {
+                kind: ReceiptType::Read,
+                client_message_ids,
+            };
+            self.outbox
+                .push(&to, OutboxKind::Receipt, &receipt.encode())?;
+        }
+        if let Some(courier) = lock(&self.courier).as_ref() {
+            courier.wake().pushed();
+        }
+        Ok(())
+    }
+
+    /// Liga ou desliga os recibos de leitura, nos dois sentidos: desligado, [`Self::mark_read`]
+    /// não envia nada e os recibos de leitura que chegam são descartados. Fica no banco local,
+    /// valendo para o app e a extensão de notificação. Ligado por padrão. Recibos de entrega
+    /// não têm opção.
+    pub fn set_read_receipts(&self, enabled: bool) -> Result<(), CoreError> {
+        Ok(self.preferences.set_read_receipts(enabled)?)
+    }
+
+    /// Se os recibos de leitura estão ligados ([`Self::set_read_receipts`]).
+    pub fn read_receipts(&self) -> Result<bool, CoreError> {
+        Ok(self.preferences.read_receipts()?)
+    }
+
+    /// Avisa `peer` que este aparelho começou (`started`) ou parou de digitar. Efêmero: não
+    /// passa pela outbox nem pelo banco; cifra e envia na hora pelo transporte, ou falha
+    /// ([`CoreError::NotConnected`], [`CoreError::Network`]…) e o app simplesmente não insiste.
+    /// Exige sessão aberta e certificado de remetente válido, como [`Self::encrypt`].
+    pub fn send_typing(&self, peer: DeviceAddress, started: bool) -> Result<(), CoreError> {
+        let peer = Address::try_from(&peer)?;
+        let transport = self.transport()?;
+        let envelope = self.encrypt_content(&peer, &Content::Typing { started })?;
+        transmit(
+            &self.store,
+            &transport,
+            &peer,
+            fresh_client_message_id().to_vec(),
+            envelope.body().to_vec(),
+            EnvelopeType::Message,
+        )
+    }
+
     /// Conecta ao servidor com o token que o `accounts` emitiu no registro deste dispositivo.
     /// Exige o endereço local ([`Self::set_local_address`]).
     ///
@@ -325,17 +419,13 @@ impl FalaaiCore {
         )?;
         let local = self.store.local_address()?.ok_or(CoreError::NoAccount)?;
         let credentials = Credentials::new(local.aci(), local.device_id(), token);
-        let (sessions, inbox, events) = (
-            self.sessions.clone(),
-            self.inbox.clone(),
-            self.events.clone(),
-        );
+        let receiver = self.receiver();
         let (wake, signals) = outbox::channel();
-        let reconnected = wake.clone();
+        let (reconnected, received) = (wake.clone(), wake.clone());
         let transport = Arc::new(Transport::connect(
             &server,
             credentials,
-            move |incoming| disposition(receive(&sessions, &inbox, &events, incoming)),
+            move |incoming| disposition(receiver.receive(incoming, Some(&received))),
             move || reconnected.retry(),
         )?);
         let courier = Courier::start(
@@ -378,7 +468,7 @@ impl FalaaiCore {
     pub fn send_message(&self, peer: DeviceAddress, body: Vec<u8>) -> Result<Vec<u8>, CoreError> {
         let body = Zeroizing::new(body);
         let peer = Address::try_from(&peer)?;
-        let client_message_id = self.outbox.push(&peer, &body)?;
+        let client_message_id = self.outbox.push(&peer, OutboxKind::Text, &body)?;
         if let Some(courier) = lock(&self.courier).as_ref() {
             courier.wake().pushed();
         }
@@ -408,6 +498,7 @@ impl FalaaiCore {
             &peer,
             client_message_id,
             envelope.body,
+            EnvelopeType::Message,
         )
     }
 
@@ -456,8 +547,29 @@ impl FalaaiCore {
         with_sessions(&self.sessions, f)
     }
 
+    /// Cifra `content` para `peer` e sela com o certificado de remetente.
+    fn encrypt_content(
+        &self,
+        peer: &Address,
+        content: &Content,
+    ) -> Result<protocol::Ciphertext, CoreError> {
+        let plaintext = content.encode();
+        self.with_sessions(|sessions| block_on(sessions.encrypt(peer, &plaintext)))
+    }
+
     fn transport(&self) -> Result<Arc<Transport>, CoreError> {
         lock(&self.transport).clone().ok_or(CoreError::NotConnected)
+    }
+
+    /// Handles para receber envelopes fora desta struct (a thread do socket autenticado).
+    fn receiver(&self) -> Receiver {
+        Receiver {
+            sessions: self.sessions.clone(),
+            inbox: self.inbox.clone(),
+            outbox: self.outbox.clone(),
+            preferences: self.preferences.clone(),
+            events: self.events.clone(),
+        }
     }
 }
 
@@ -471,8 +583,13 @@ fn attempt(
         let Some(transport) = transport.upgrade() else {
             return Attempt::Retry;
         };
+        let plaintext = pending.plaintext();
+        let envelope_type = match pending.kind {
+            OutboxKind::Text => EnvelopeType::Message,
+            OutboxKind::Receipt => EnvelopeType::Receipt,
+        };
         let sent = with_sessions(&sessions, |sessions| {
-            block_on(sessions.encrypt(&pending.to, &pending.body))
+            block_on(sessions.encrypt(&pending.to, &plaintext))
         })
         .and_then(|envelope| {
             transmit(
@@ -481,6 +598,7 @@ fn attempt(
                 &pending.to,
                 pending.client_message_id.to_vec(),
                 envelope.body().to_vec(),
+                envelope_type,
             )
         });
         classify(sent)
@@ -502,14 +620,15 @@ fn notify(events: Arc<Mutex<Option<Deliver>>>) -> NotifyFn {
     })
 }
 
-/// Envia o envelope selado `content` a `peer`: pelo socket não autenticado se há a access key do
-/// contato, senão pelo autenticado.
+/// Envia o envelope selado `content` a `peer`, com o tipo externo `envelope_type`: pelo socket
+/// não autenticado se há a access key do contato, senão pelo autenticado.
 fn transmit(
     store: &SqliteStore,
     transport: &Transport,
     peer: &Address,
     client_message_id: Vec<u8>,
     content: Vec<u8>,
+    envelope_type: EnvelopeType,
 ) -> Result<(), CoreError> {
     let destination_aci = Uuid::parse_str(peer.aci())
         .map_err(|_| CoreError::InvalidAddress)?
@@ -519,6 +638,7 @@ fn transmit(
         destination_aci,
         destination_device_id: peer.device_id(),
         client_message_id,
+        envelope_type,
         content,
     };
     let sent = transport.send(outgoing, access_key.as_ref().map(AccessKey::as_bytes))?;
@@ -551,52 +671,165 @@ where
     Ok(f(sessions)?)
 }
 
-/// Abre e decifra o envelope, grava a mensagem em `inbox` e entrega o texto ao assinante de
-/// eventos, numa transação só: sem assinante, ou com o stream fechado na entrega, falha com
-/// [`CoreError::NoEventListener`], nada fica gravado e o ratchet não avança, então o mesmo
-/// envelope decifra de novo quando o servidor o reentregar. Um reenvio de mensagem já gravada
-/// avança o ratchet sem gravar nem entregar e falha com [`CoreError::DuplicateMessage`].
-fn receive(
-    sessions: &Mutex<Option<CoreSessions>>,
-    inbox: &Inbox,
-    events: &Mutex<Option<Deliver>>,
-    incoming: Incoming<'_>,
-) -> Result<(), CoreError> {
-    let envelope = protocol::Ciphertext::new(incoming.content.to_vec());
-    let timestamp = incoming.server_timestamp;
-    // O assinante fica travado durante a decifragem: não troca entre a checagem e a entrega.
-    let events = lock(events);
-    let deliver = events.as_ref().ok_or(CoreError::NoEventListener)?;
-    let fresh = with_sessions(sessions, |sessions| {
-        block_on(sessions.decrypt(&envelope, timestamp, |decrypted| {
-            // Roda na thread dona da transação do decrypt: grava junto com o ratchet.
-            let Some(id) = inbox.record(
-                &decrypted.from,
-                incoming.client_message_id,
-                timestamp,
-                &decrypted.plaintext,
-                decrypted.identity_changed,
-            )?
-            else {
-                return Ok(false);
-            };
-            let event = ChatEvent::MessageReceived {
-                id,
-                from: DeviceAddress::from(&decrypted.from),
-                body: decrypted.plaintext.to_vec(),
-                identity_changed: decrypted.identity_changed,
-            };
-            if deliver(event) {
-                Ok(true)
-            } else {
-                Err(CoreError::NoEventListener)
+/// Quem recebe envelopes: o núcleo e, com os mesmos handles, a thread do socket autenticado.
+#[derive(Clone)]
+struct Receiver {
+    sessions: Arc<Mutex<Option<CoreSessions>>>,
+    inbox: Inbox,
+    outbox: Outbox,
+    preferences: Preferences,
+    events: Arc<Mutex<Option<Deliver>>>,
+}
+
+/// O que ficou de um envelope decifrado.
+enum Received {
+    /// Gravado e entregue; `receipt_queued` se um recibo de entrega entrou na outbox.
+    Fresh { receipt_queued: bool },
+    /// Reenvio de algo já gravado: o ratchet avançou, nada mais.
+    Duplicate,
+    /// Efêmero, ou descartado por opção: o ratchet avançou, nada foi gravado.
+    Dropped,
+}
+
+impl Receiver {
+    /// Abre e decifra o envelope e trata o conteúdo conforme o tipo (ver
+    /// [`FalaaiCore::decrypt`]), numa transação só: sem assinante, ou com o stream fechado na
+    /// entrega, falha com [`CoreError::NoEventListener`], nada fica gravado e o ratchet não
+    /// avança, então o mesmo envelope decifra de novo quando o servidor o reentregar. Um reenvio
+    /// de mensagem ou recibo já gravado avança o ratchet sem gravar nem entregar e falha com
+    /// [`CoreError::DuplicateMessage`]. `wake` acorda a outbox quando um recibo de entrega entra
+    /// nela.
+    fn receive(
+        &self,
+        incoming: Incoming<'_>,
+        wake: Option<&outbox::Wake>,
+    ) -> Result<(), CoreError> {
+        let envelope = protocol::Ciphertext::new(incoming.content.to_vec());
+        // O assinante fica travado durante a decifragem: não troca entre a checagem e a entrega.
+        let events = lock(&self.events);
+        let received = with_sessions(&self.sessions, |sessions| {
+            block_on(
+                sessions.decrypt(&envelope, incoming.server_timestamp, |decrypted| {
+                    self.store(decrypted, &incoming, events.as_ref())
+                }),
+            )
+        })?;
+        match received {
+            Received::Fresh {
+                receipt_queued: true,
+            } => {
+                if let Some(wake) = wake {
+                    wake.pushed();
+                }
+                Ok(())
             }
-        }))
-    })?;
-    if fresh {
-        Ok(())
-    } else {
-        Err(CoreError::DuplicateMessage)
+            Received::Fresh {
+                receipt_queued: false,
+            }
+            | Received::Dropped => Ok(()),
+            Received::Duplicate => Err(CoreError::DuplicateMessage),
+        }
+    }
+
+    /// Roda na thread dona da transação do decrypt: o que grava, grava junto com o ratchet, e um
+    /// `Err` desfaz tudo.
+    fn store(
+        &self,
+        decrypted: Decrypted,
+        incoming: &Incoming<'_>,
+        deliver: Option<&Deliver>,
+    ) -> Result<Received, CoreError> {
+        let from = DeviceAddress::from(&decrypted.from);
+        let server_timestamp = incoming.server_timestamp;
+        let content =
+            Content::decode(&decrypted.plaintext).map_err(|_| CoreError::InvalidMessage)?;
+        match content {
+            Content::Typing { started } => {
+                // Nunca persiste. Sem assinante, some: um aviso de digitação não espera ninguém.
+                if let Some(deliver) = deliver {
+                    deliver(ChatEvent::Typing {
+                        from,
+                        started,
+                        server_timestamp,
+                    });
+                }
+                Ok(Received::Dropped)
+            }
+            Content::Text(body) => {
+                let deliver = deliver.ok_or(CoreError::NoEventListener)?;
+                let Some(id) = self.inbox.record(
+                    &decrypted.from,
+                    incoming.client_message_id,
+                    server_timestamp,
+                    &body,
+                    decrypted.identity_changed,
+                )?
+                else {
+                    return Ok(Received::Duplicate);
+                };
+                // Recibo de entrega para quem enviou, na mesma transação: ou a mensagem fica
+                // gravada e o recibo sai, ou nenhum dos dois.
+                let receipt_queued = match ClientMessageId::try_from(incoming.client_message_id) {
+                    Ok(client_message_id) => {
+                        let receipt = Content::Receipt {
+                            kind: ReceiptType::Delivery,
+                            client_message_ids: vec![client_message_id],
+                        };
+                        self.outbox.push(
+                            &decrypted.from,
+                            OutboxKind::Receipt,
+                            &receipt.encode(),
+                        )?;
+                        true
+                    }
+                    Err(_) => false,
+                };
+                let event = ChatEvent::MessageReceived {
+                    id,
+                    from,
+                    body: body.to_vec(),
+                    identity_changed: decrypted.identity_changed,
+                };
+                if deliver(event) {
+                    Ok(Received::Fresh { receipt_queued })
+                } else {
+                    Err(CoreError::NoEventListener)
+                }
+            }
+            Content::Receipt {
+                kind,
+                client_message_ids,
+            } => {
+                if kind == ReceiptType::Read && !self.preferences.read_receipts()? {
+                    return Ok(Received::Dropped);
+                }
+                let deliver = deliver.ok_or(CoreError::NoEventListener)?;
+                let Some(id) = self.inbox.record_receipt(
+                    &decrypted.from,
+                    incoming.client_message_id,
+                    server_timestamp,
+                    kind,
+                    &client_message_ids,
+                )?
+                else {
+                    return Ok(Received::Duplicate);
+                };
+                let event = ChatEvent::ReceiptReceived {
+                    id,
+                    from,
+                    kind: kind.into(),
+                    client_message_ids: client_message_ids.iter().map(|id| id.to_vec()).collect(),
+                    server_timestamp,
+                };
+                if deliver(event) {
+                    Ok(Received::Fresh {
+                        receipt_queued: false,
+                    })
+                } else {
+                    Err(CoreError::NoEventListener)
+                }
+            }
+        }
     }
 }
 
@@ -648,10 +881,43 @@ mod tests {
     use std::sync::mpsc::{self, Receiver};
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    use self::types::ReceiptKind;
     use super::*;
     use crate::protocol::certificate::CertificateIssuer;
 
     type TestResult = Result<(), Box<dyn Error>>;
+
+    /// Uma linha da outbox: destinatário, código do tipo (0 texto, 1 recibo) e corpo.
+    type OutboxRow = (DeviceAddress, i64, Vec<u8>);
+
+    /// A outbox de `core` inteira, em ordem.
+    fn outbox_rows(core: &FalaaiCore) -> Result<Vec<OutboxRow>, Box<dyn Error>> {
+        Ok(core.db.with(|c| {
+            let mut select = c.prepare(
+                "SELECT recipient_aci, recipient_device_id, kind, body FROM outbox ORDER BY id",
+            )?;
+            let rows = select.query_map([], |row| {
+                Ok((
+                    DeviceAddress {
+                        aci: row.get(0)?,
+                        device_id: row.get(1)?,
+                    },
+                    row.get(2)?,
+                    row.get(3)?,
+                ))
+            })?;
+            rows.collect()
+        })?)
+    }
+
+    /// A linha de outbox de um recibo `kind` para `to` pelas mensagens `ids`.
+    fn receipt_row(to: &DeviceAddress, kind: ReceiptType, ids: &[ClientMessageId]) -> OutboxRow {
+        let receipt = Content::Receipt {
+            kind,
+            client_message_ids: ids.to_vec(),
+        };
+        (to.clone(), 1, receipt.encode().to_vec())
+    }
 
     const KEY: [u8; 32] = [0x5A; 32];
 
@@ -801,6 +1067,43 @@ mod tests {
 
         fn deliver(&self, envelope: Envelope) -> Result<(), Box<dyn Error>> {
             Ok(self.core.decrypt(envelope, Vec::new(), now_millis()?)?)
+        }
+
+        /// Cifra e sela `content` para `to`, como a outbox faria.
+        fn send_content(&self, to: &Device, content: &Content) -> Result<Envelope, CoreError> {
+            let peer = Address::try_from(&to.address)?;
+            Ok(self.core.encrypt_content(&peer, content)?.into())
+        }
+
+        /// Decifra um envelope entregue agora com `client_message_id`, como o socket faria.
+        fn deliver_with_id(&self, envelope: Envelope, id: &[u8]) -> Result<(), CoreError> {
+            let now = now_millis().map_err(|_| CoreError::Internal)?;
+            self.core.decrypt(envelope, id.to_vec(), now)
+        }
+
+        /// Decifra e devolve o recibo que chegou no stream de eventos.
+        fn receive_receipt(
+            &self,
+            envelope: Envelope,
+            id: &[u8],
+        ) -> Result<ReceivedReceipt, Box<dyn Error>> {
+            self.deliver_with_id(envelope, id)?;
+            match self.events.try_recv()? {
+                ChatEvent::ReceiptReceived {
+                    id,
+                    from,
+                    kind,
+                    client_message_ids,
+                    server_timestamp,
+                } => Ok(ReceivedReceipt {
+                    id,
+                    from,
+                    kind,
+                    client_message_ids,
+                    server_timestamp,
+                }),
+                other => Err(format!("esperava recibo, veio {other:?}").into()),
+            }
         }
 
         /// Decifra, confere o remetente e que a mensagem do evento ficou gravada, e devolve o
@@ -1122,6 +1425,258 @@ mod tests {
     }
 
     #[test]
+    fn mensagem_recebida_poe_recibo_de_entrega_na_outbox_na_mesma_transacao() -> TestResult {
+        let server = Server::new()?;
+        let (alice, mut bob) = alice_and_bob(&server)?;
+        let id = [0x11; 16];
+
+        // Com o stream fechado nada fica: nem a mensagem, nem o recibo.
+        bob.events = mpsc::channel().1;
+        let first = alice.send(&bob, b"oi, bob")?;
+        assert_eq!(
+            bob.deliver_with_id(first.clone(), &id),
+            Err(CoreError::NoEventListener)
+        );
+        assert!(outbox_rows(&bob.core)?.is_empty());
+
+        bob.events = subscribe(&bob.core);
+        bob.deliver_with_id(first, &id)?;
+        assert!(matches!(
+            bob.events.try_recv()?,
+            ChatEvent::MessageReceived { .. }
+        ));
+        let expected = receipt_row(&alice.address, ReceiptType::Delivery, &[id]);
+        assert_eq!(outbox_rows(&bob.core)?, std::slice::from_ref(&expected));
+
+        // O reenvio da mesma mensagem não gera outro recibo; mensagem sem id, tampouco.
+        assert_eq!(
+            bob.deliver_with_id(alice.send(&bob, b"oi, bob")?, &id),
+            Err(CoreError::DuplicateMessage)
+        );
+        assert_eq!(
+            bob.receive(&alice, alice.send(&bob, b"sem id")?)?,
+            b"sem id"
+        );
+        assert_eq!(outbox_rows(&bob.core)?, [expected]);
+        Ok(())
+    }
+
+    #[test]
+    fn recibo_recebido_vira_evento_e_fica_gravado_uma_vez() -> TestResult {
+        let server = Server::new()?;
+        let (alice, bob) = alice_and_bob(&server)?;
+        bob.receive(&alice, alice.send(&bob, b"oi")?)?;
+        let delivered = Content::Receipt {
+            kind: ReceiptType::Delivery,
+            client_message_ids: vec![[1; 16]],
+        };
+        let read = Content::Receipt {
+            kind: ReceiptType::Read,
+            client_message_ids: vec![[1; 16], [2; 16]],
+        };
+
+        let envelope_id = [0xD1; 16];
+        let receipt = alice.receive_receipt(bob.send_content(&alice, &delivered)?, &envelope_id)?;
+        assert_eq!(receipt.from, bob.address);
+        assert_eq!(receipt.kind, ReceiptKind::Delivery);
+        assert_eq!(receipt.client_message_ids, [vec![1; 16]]);
+        assert_eq!(
+            alice.core.received_receipts(0, 10)?,
+            std::slice::from_ref(&receipt)
+        );
+        assert!(alice.core.received_messages(0, 10)?.is_empty());
+
+        // O reenvio avança o ratchet sem gravar nem avisar de novo.
+        assert_eq!(
+            alice.deliver_with_id(bob.send_content(&alice, &delivered)?, &envelope_id),
+            Err(CoreError::DuplicateMessage)
+        );
+        assert!(alice.events.try_recv().is_err());
+
+        let read_receipt = alice.receive_receipt(bob.send_content(&alice, &read)?, &[0xD2; 16])?;
+        assert_eq!(read_receipt.kind, ReceiptKind::Read);
+        assert_eq!(read_receipt.client_message_ids, [vec![1; 16], vec![2; 16]]);
+        assert_eq!(
+            alice.core.received_receipts(receipt.id, 10)?,
+            [read_receipt]
+        );
+        // Recibos não entram na outbox de quem os recebe.
+        assert!(outbox_rows(&alice.core)?.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn recibo_de_leitura_e_descartado_com_a_opcao_desligada() -> TestResult {
+        let server = Server::new()?;
+        let (mut alice, bob) = alice_and_bob(&server)?;
+        bob.receive(&alice, alice.send(&bob, b"oi")?)?;
+        let read = Content::Receipt {
+            kind: ReceiptType::Read,
+            client_message_ids: vec![[1; 16]],
+        };
+        let delivered = Content::Receipt {
+            kind: ReceiptType::Delivery,
+            client_message_ids: vec![[1; 16]],
+        };
+
+        assert!(alice.core.read_receipts()?);
+        alice.core.set_read_receipts(false)?;
+        assert!(!alice.core.read_receipts()?);
+
+        // Consumido sem gravar nem avisar; o ratchet avançou.
+        let envelope = bob.send_content(&alice, &read)?;
+        alice.deliver_with_id(envelope.clone(), &[0xD1; 16])?;
+        assert!(alice.events.try_recv().is_err());
+        assert!(alice.core.received_receipts(0, 10)?.is_empty());
+        assert_eq!(
+            alice.deliver_with_id(envelope, &[0xD1; 16]),
+            Err(CoreError::DuplicateMessage)
+        );
+        // Recibo de entrega não tem opção.
+        let receipt = alice.receive_receipt(bob.send_content(&alice, &delivered)?, &[0xD2; 16])?;
+        assert_eq!(receipt.kind, ReceiptKind::Delivery);
+
+        // A opção fica no banco.
+        alice.core = server.open(0xA1)?;
+        assert!(!alice.core.read_receipts()?);
+        alice.core.set_read_receipts(true)?;
+        assert!(server.open(0xA1)?.read_receipts()?);
+        Ok(())
+    }
+
+    #[test]
+    fn mark_read_envia_um_recibo_de_leitura_por_remetente() -> TestResult {
+        let server = Server::new()?;
+        let (alice, bob) = alice_and_bob(&server)?;
+        let carol = Device::register(&server, 0xC0)?;
+        let bundle = PreKeyBundle {
+            pre_key: None,
+            kyber_pre_key: bob.keys.kyber_last_resort_pre_key.clone(),
+            ..bob.bundle()?
+        };
+        carol
+            .core
+            .process_prekey_bundle(bob.address.clone(), bundle)?;
+
+        let mut ids = Vec::new();
+        for (from, id, text) in [
+            (&alice, [0xA1; 16], &b"a1"[..]),
+            (&carol, [0xC1; 16], b"c1"),
+            (&alice, [0xA2; 16], b"a2"),
+        ] {
+            bob.deliver_with_id(from.send(&bob, text)?, &id)?;
+            match bob.events.try_recv()? {
+                ChatEvent::MessageReceived { id, .. } => ids.push(id),
+                other => return Err(format!("esperava mensagem, veio {other:?}").into()),
+            }
+        }
+        let [a1, c1, a2] = ids[..] else {
+            return Err("esperava três mensagens".into());
+        };
+        bob.receive(&alice, alice.send(&bob, b"sem id")?)?;
+        let no_id = bob.core.received_messages(a2, 1)?[0].id;
+        let delivery_receipts = outbox_rows(&bob.core)?;
+        assert_eq!(delivery_receipts.len(), 3);
+
+        bob.core.mark_read(vec![a2, no_id, c1, a1, 9_999])?;
+        let rows = outbox_rows(&bob.core)?;
+        assert_eq!(
+            rows[3..],
+            [
+                receipt_row(&alice.address, ReceiptType::Read, &[[0xA2; 16], [0xA1; 16]]),
+                receipt_row(&carol.address, ReceiptType::Read, &[[0xC1; 16]]),
+            ]
+        );
+
+        // Sem nada a confirmar, ou com a opção desligada, nada entra na fila.
+        bob.core.mark_read(vec![no_id, 9_999])?;
+        bob.core.mark_read(Vec::new())?;
+        bob.core.set_read_receipts(false)?;
+        bob.core.mark_read(vec![a1])?;
+        assert_eq!(outbox_rows(&bob.core)?.len(), 5);
+        Ok(())
+    }
+
+    #[test]
+    fn digitacao_vira_evento_e_nao_fica_em_lugar_nenhum() -> TestResult {
+        let server = Server::new()?;
+        let (alice, bob) = alice_and_bob(&server)?;
+        bob.receive(&alice, alice.send(&bob, b"oi")?)?;
+        let typing = |started| Content::Typing { started };
+
+        let sent_at = now_millis()?;
+        alice.core.decrypt(
+            bob.send_content(&alice, &typing(true))?,
+            vec![0x71; 16],
+            sent_at,
+        )?;
+        match alice.events.try_recv()? {
+            ChatEvent::Typing {
+                from,
+                started,
+                server_timestamp,
+            } => {
+                assert_eq!(from, bob.address);
+                assert!(started);
+                assert_eq!(server_timestamp, sent_at);
+            }
+            other => return Err(format!("esperava digitação, veio {other:?}").into()),
+        }
+        assert!(alice.core.received_messages(0, 10)?.is_empty());
+        assert!(alice.core.received_receipts(0, 10)?.is_empty());
+        assert!(outbox_rows(&alice.core)?.is_empty());
+
+        // Sem assinante, o aviso é consumido e some: não volta na reentrega.
+        let unsubscribed = server.open(0xA1)?;
+        let envelope = bob.send_content(&alice, &typing(false))?;
+        unsubscribed.decrypt(envelope.clone(), vec![0x72; 16], sent_at)?;
+        assert_eq!(
+            alice.deliver_with_id(envelope, &[0x72; 16]),
+            Err(CoreError::DuplicateMessage)
+        );
+        assert!(alice.events.try_recv().is_err());
+
+        // E a conversa segue.
+        assert_eq!(
+            bob.receive(&alice, alice.send(&bob, b"tudo bem?")?)?,
+            b"tudo bem?"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn send_typing_exige_conexao_e_nao_toca_a_outbox() -> TestResult {
+        let server = Server::new()?;
+        let (alice, bob) = alice_and_bob(&server)?;
+        assert_eq!(
+            alice.core.send_typing(bob.address.clone(), true),
+            Err(CoreError::NotConnected)
+        );
+        assert!(outbox_rows(&alice.core)?.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn conteudo_que_nao_se_le_e_recusado_sem_gravar() -> TestResult {
+        let server = Server::new()?;
+        let (alice, bob) = alice_and_bob(&server)?;
+        let peer = Address::try_from(&bob.address)?;
+        let garbage: Envelope = alice
+            .core
+            .with_sessions(|sessions| block_on(sessions.encrypt(&peer, &[0xFF, 0xFF])))?
+            .into();
+        assert_eq!(
+            bob.deliver_with_id(garbage, &[0x33; 16]),
+            Err(CoreError::InvalidMessage)
+        );
+        assert!(bob.events.try_recv().is_err());
+        assert!(bob.stored()?.is_empty());
+        assert!(outbox_rows(&bob.core)?.is_empty());
+        assert_eq!(bob.receive(&alice, alice.send(&bob, b"oi")?)?, b"oi");
+        Ok(())
+    }
+
+    #[test]
     fn mensagem_vai_para_a_outbox_sem_conexao_e_sobrevive_a_reabrir() -> TestResult {
         let server = Server::new()?;
         let (mut alice, bob) = alice_and_bob(&server)?;
@@ -1402,14 +1957,37 @@ mod tests {
             client_message_id: vec![0xEE; 16],
             error: CoreError::SessionNotFound,
         };
-        for debug in [&sent, &failed].map(|event| format!("{event:?}")) {
+        let receipt_event = ChatEvent::ReceiptReceived {
+            id: 7,
+            from: from.clone(),
+            kind: ReceiptKind::Read,
+            client_message_ids: vec![vec![0xEE; 16]],
+            server_timestamp: 1,
+        };
+        let receipt = ReceivedReceipt {
+            id: 7,
+            from: from.clone(),
+            kind: ReceiptKind::Read,
+            client_message_ids: vec![vec![0xEE; 16]],
+            server_timestamp: 1,
+        };
+        let typing = ChatEvent::Typing {
+            from: from.clone(),
+            started: true,
+            server_timestamp: 1,
+        };
+        for debug in [&sent, &failed, &receipt_event].map(|event| format!("{event:?}")) {
             assert!(!debug.contains("238"), "{debug}");
         }
+        assert!(!format!("{receipt:?}").contains("238"));
         for debug in [
             format!("{event:?}"),
             format!("{envelope:?}"),
             format!("{message:?}"),
             format!("{safety_number:?}"),
+            format!("{receipt_event:?}"),
+            format!("{receipt:?}"),
+            format!("{typing:?}"),
         ] {
             assert!(!debug.contains(&from.aci), "{debug}");
             assert!(!debug.contains("segredo"), "{debug}");

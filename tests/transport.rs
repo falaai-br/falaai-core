@@ -6,16 +6,22 @@
 //! no não autenticado só com a unidentified access key que o destinatário registrou. Ele guarda
 //! cada frame `Send` como chegou, para o teste exigido pelo fla-0wu: nenhum carrega o ACI do
 //! remetente fora do conteúdo selado.
+//!
+//! Toda mensagem que Bob recebe faz o núcleo dele mandar um recibo de entrega a Alice, pela
+//! mesma fila: os testes que contam os `Send` de Alice olham só os destinados a Bob, e os que
+//! esperam um evento em Alice toleram o recibo chegar antes ou depois.
 
 mod common;
 
+use std::cell::RefCell;
+use std::collections::VecDeque;
 use std::error::Error;
 use std::time::Duration;
 
 use common::{Device, TestResult, accounts, now_millis};
 use falaai_core::api::error::CoreError;
 use falaai_core::api::test_support::unidentified_access_key;
-use falaai_core::api::types::{ChatEvent, DeviceAddress, ServerConfig};
+use falaai_core::api::types::{ChatEvent, DeviceAddress, ReceiptKind, ServerConfig};
 use uuid::Uuid;
 
 use self::fake::{Fault, Gateway, Socket};
@@ -35,7 +41,13 @@ struct World {
     server: Gateway,
     alice: Device,
     bob: Device,
+    /// Eventos de Alice lidos à procura de outro, à espera de quem os queira.
+    alice_pending: RefCell<VecDeque<ChatEvent>>,
 }
+
+/// Tipo externo do envelope no fio (`EnvelopeType` do falaai-proto).
+const ENVELOPE_MESSAGE: i32 = 1;
+const ENVELOPE_RECEIPT: i32 = 2;
 
 impl World {
     fn new() -> Result<Self, Box<dyn Error>> {
@@ -56,7 +68,69 @@ impl World {
             server,
             alice,
             bob,
+            alice_pending: RefCell::new(VecDeque::new()),
         })
+    }
+
+    /// Os `Send` que chegaram ao servidor com `to` como destinatário, em ordem.
+    fn sends_to(&self, to: &Device) -> Result<Vec<fake::CapturedSend>, Box<dyn Error>> {
+        let aci = aci_bytes(to)?;
+        Ok(self
+            .server
+            .sends()
+            .into_iter()
+            .filter(|send| send.destination_aci == aci)
+            .collect())
+    }
+
+    /// O primeiro evento de Alice que satisfaz `wanted`, pulando (e guardando para depois) os
+    /// outros.
+    fn alice_event_where(
+        &self,
+        wanted: impl Fn(&ChatEvent) -> bool,
+    ) -> Result<ChatEvent, Box<dyn Error>> {
+        let mut pending = self.alice_pending.borrow_mut();
+        if let Some(index) = pending.iter().position(&wanted) {
+            return pending.remove(index).ok_or_else(|| "sem evento".into());
+        }
+        loop {
+            let event = self.alice.next_event(WAIT)?;
+            if wanted(&event) {
+                return Ok(event);
+            }
+            pending.push_back(event);
+        }
+    }
+
+    /// Alice não tem evento nenhum à espera.
+    fn alice_hears_nothing_more(&self) -> TestResult {
+        std::thread::sleep(Duration::from_millis(500));
+        assert!(
+            self.alice_pending.borrow().is_empty(),
+            "evento sobrando: {:?}",
+            self.alice_pending.borrow()
+        );
+        assert!(self.alice.no_events(), "Alice recebeu algo a mais");
+        Ok(())
+    }
+
+    /// Alice recebe de Bob o recibo `kind` pela mensagem `id`; devolve o id do recibo no banco.
+    fn alice_hears_receipt(&self, kind: ReceiptKind, id: &[u8]) -> Result<i64, Box<dyn Error>> {
+        let event = self.alice_event_where(
+            |event| matches!(event, ChatEvent::ReceiptReceived { kind: k, .. } if *k == kind),
+        )?;
+        let ChatEvent::ReceiptReceived {
+            id: receipt_id,
+            from,
+            client_message_ids,
+            ..
+        } = event
+        else {
+            return Err("esperava recibo".into());
+        };
+        assert_eq!(from, self.bob.address);
+        assert_eq!(client_message_ids, [id.to_vec()]);
+        Ok(receipt_id)
     }
 
     /// Alice cifra e envia `text` a Bob; devolve o `client_message_id`.
@@ -84,9 +158,12 @@ impl World {
             .send_message(self.bob.address.clone(), text.to_vec())
     }
 
-    /// O próximo evento de Alice diz que o servidor aceitou a mensagem `id`.
+    /// Alice ouve que o servidor aceitou a mensagem `id`. Um recibo que chegue antes fica
+    /// guardado; outro `MessageSent` não: a ordem dos aceites é a da fila.
     fn alice_hears_sent(&self, id: &[u8]) -> TestResult {
-        match self.alice.next_event(WAIT)? {
+        let event =
+            self.alice_event_where(|event| matches!(event, ChatEvent::MessageSent { .. }))?;
+        match event {
             ChatEvent::MessageSent { client_message_id } => {
                 assert_eq!(client_message_id, id);
                 Ok(())
@@ -126,11 +203,16 @@ fn without(frame: &[u8], part: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
     Ok([&frame[..start], &frame[start + part.len()..]].concat())
 }
 
-/// Nenhum `Send` carrega o ACI do remetente (binário ou texto) fora do conteúdo selado, nem
-/// dentro dele: o selo esconde o remetente.
+/// Nenhum `Send` de `sender` carrega o ACI dele (binário ou texto) fora do conteúdo selado, nem
+/// dentro dele: o selo esconde o remetente. Os `Send` destinados a `sender` (os recibos que o
+/// outro lado manda a ele) levam o ACI dele como destinatário e ficam de fora.
 fn assert_no_sender(server: &Gateway, sender: &Device) -> TestResult {
     let sender_aci = aci_bytes(sender)?;
-    let sends = server.sends();
+    let sends: Vec<_> = server
+        .sends()
+        .into_iter()
+        .filter(|send| send.destination_aci != sender_aci)
+        .collect();
     assert!(!sends.is_empty());
     for send in sends {
         let outside_seal = without(&send.frame, &send.content)?;
@@ -157,12 +239,12 @@ fn com_profile_key_envia_pelo_socket_nao_autenticado_sem_o_remetente() -> TestRe
     let id = world.alice_sends(b"oi, bob")?;
     world.bob_receives(b"oi, bob")?;
 
-    let sends = world.server.sends();
+    let sends = world.sends_to(&world.bob)?;
     assert_eq!(sends.len(), 1);
     let send = sends.first().ok_or("sem send")?;
     assert_eq!(send.socket, Socket::Unidentified);
     assert_eq!(send.client_message_id, id);
-    assert_eq!(send.destination_aci, aci_bytes(&world.bob)?);
+    assert_eq!(send.envelope_type, ENVELOPE_MESSAGE);
     assert_eq!(send.access_key, unidentified_access_key(&BOB_PROFILE_KEY));
     assert_no_sender(&world.server, &world.alice)?;
 
@@ -187,7 +269,7 @@ fn sem_profile_key_cai_para_o_socket_autenticado() -> TestResult {
     world.alice_sends(b"primeiro contato")?;
     world.bob_receives(b"primeiro contato")?;
 
-    let sends = world.server.sends();
+    let sends = world.sends_to(&world.bob)?;
     assert_eq!(sends.len(), 1);
     let send = sends.first().ok_or("sem send")?;
     assert_eq!(send.socket, Socket::Authenticated);
@@ -208,8 +290,7 @@ fn access_key_recusada_cai_para_o_socket_autenticado() -> TestResult {
     world.bob_receives(b"profile key velha")?;
 
     let sockets = world
-        .server
-        .sends()
+        .sends_to(&world.bob)?
         .iter()
         .map(|send| (send.socket, send.access_key.is_empty()))
         .collect::<Vec<_>>();
@@ -308,7 +389,7 @@ fn outbox_envia_e_avisa_que_o_servidor_aceitou() -> TestResult {
     world.bob_receives(b"oi, bob")?;
     world.alice_hears_sent(&id)?;
 
-    let sends = world.server.sends();
+    let sends = world.sends_to(&world.bob)?;
     let [send] = sends.as_slice() else {
         return Err(format!("{} sends", sends.len()).into());
     };
@@ -333,8 +414,7 @@ fn outbox_envia_na_ordem_em_que_as_mensagens_entraram() -> TestResult {
         world.alice_hears_sent(id)?;
     }
     let sent: Vec<Vec<u8>> = world
-        .server
-        .sends()
+        .sends_to(&world.bob)?
         .into_iter()
         .map(|send| send.client_message_id)
         .collect();
@@ -356,15 +436,17 @@ fn sendack_perdido_reenvia_com_o_mesmo_id_e_o_receptor_descarta_a_copia() -> Tes
     world.bob_receives(b"so uma vez")?;
     world.alice_hears_sent(&id)?;
 
-    let sends = world.server.sends();
+    let sends = world.sends_to(&world.bob)?;
     assert_eq!(sends.len(), 2);
     assert!(sends.iter().all(|send| send.client_message_id == id));
     // Cada tentativa cifra de novo: o ratchet sozinho não reconheceria a cópia.
     assert_ne!(sends[0].content, sends[1].content);
-    // As duas entregas são confirmadas, e a cópia não vira mensagem.
+    // As duas entregas são confirmadas, e a cópia não vira mensagem nem segundo recibo.
     world.server.wait_acked(2)?;
     world.bob_hears_nothing_more()?;
     assert_eq!(world.bob.core().received_messages(0, 10)?.len(), 1);
+    world.alice_hears_receipt(ReceiptKind::Delivery, &id)?;
+    world.alice_hears_nothing_more()?;
 
     // A conversa segue.
     let next = world.alice_posts(b"e a proxima")?;
@@ -383,7 +465,7 @@ fn conexao_caida_no_envio_reenvia_depois_de_reconectar() -> TestResult {
     world.bob_receives(b"depois da queda")?;
     world.alice_hears_sent(&id)?;
 
-    let sends = world.server.sends();
+    let sends = world.sends_to(&world.bob)?;
     assert_eq!(sends.len(), 2);
     assert!(
         sends
@@ -458,7 +540,145 @@ fn resultado_sem_assinante_chega_quando_alguem_assina() -> TestResult {
 
     world.alice.subscribe();
     world.alice_hears_sent(&id)?;
-    assert_eq!(world.server.sends().len(), 1);
+    assert_eq!(world.sends_to(&world.bob)?.len(), 1);
+    Ok(())
+}
+
+#[test]
+fn entrega_gera_recibo_de_entrega_para_quem_enviou() -> TestResult {
+    let world = World::new()?;
+    let id = world.alice_posts(b"oi, bob")?;
+    world.bob_receives(b"oi, bob")?;
+    world.alice_hears_sent(&id)?;
+    let receipt_id = world.alice_hears_receipt(ReceiptKind::Delivery, &id)?;
+
+    // Gravado para o app ler, com o mesmo id do evento.
+    let stored = world.alice.core().received_receipts(0, 10)?;
+    let [receipt] = stored.as_slice() else {
+        return Err(format!("{} recibos gravados", stored.len()).into());
+    };
+    assert_eq!(receipt.id, receipt_id);
+    assert_eq!(receipt.from, world.bob.address);
+    assert_eq!(receipt.kind, ReceiptKind::Delivery);
+    assert_eq!(receipt.client_message_ids, [id]);
+
+    // No fio o recibo vai como RECEIPT, selado como qualquer mensagem, e ninguém manda recibo
+    // de recibo.
+    let to_alice = world.sends_to(&world.alice)?;
+    assert_eq!(to_alice.len(), 1);
+    assert_eq!(to_alice[0].envelope_type, ENVELOPE_RECEIPT);
+    assert_eq!(to_alice[0].client_message_id.len(), 16);
+    assert_no_sender(&world.server, &world.bob)?;
+    world.server.wait_acked(2)?;
+    world.bob_hears_nothing_more()?;
+    assert_eq!(world.sends_to(&world.bob)?.len(), 1);
+    world.alice_hears_nothing_more()?;
+    Ok(())
+}
+
+#[test]
+fn mark_read_envia_recibo_de_leitura_e_desligado_cala_os_dois_lados() -> TestResult {
+    let world = World::new()?;
+    let id = world.alice_posts(b"oi, bob")?;
+    world.bob_receives(b"oi, bob")?;
+    world.alice_hears_sent(&id)?;
+    world.alice_hears_receipt(ReceiptKind::Delivery, &id)?;
+    let last_message = |device: &Device| -> Result<i64, Box<dyn Error>> {
+        let messages = device.core().received_messages(0, u32::MAX)?;
+        Ok(messages.last().ok_or("sem mensagem")?.id)
+    };
+
+    world
+        .bob
+        .core()
+        .mark_read(vec![last_message(&world.bob)?])?;
+    world.alice_hears_receipt(ReceiptKind::Read, &id)?;
+    assert_eq!(world.alice.core().received_receipts(0, 10)?.len(), 2);
+
+    // Alice desligou: o recibo de leitura que chega some; o de entrega segue.
+    world.alice.core().set_read_receipts(false)?;
+    let second = world.alice_posts(b"de novo")?;
+    world.bob_receives(b"de novo")?;
+    world.alice_hears_sent(&second)?;
+    world.alice_hears_receipt(ReceiptKind::Delivery, &second)?;
+    world
+        .bob
+        .core()
+        .mark_read(vec![last_message(&world.bob)?])?;
+    // O recibo descartado também é confirmado ao servidor: é o sexto Ack.
+    world.server.wait_acked(6)?;
+    world.alice_hears_nothing_more()?;
+    assert_eq!(world.alice.core().received_receipts(0, 10)?.len(), 3);
+
+    // Bob desligou: `mark_read` não manda nada.
+    world.alice.core().set_read_receipts(true)?;
+    world.bob.core().set_read_receipts(false)?;
+    let third = world.alice_posts(b"e mais uma")?;
+    world.bob_receives(b"e mais uma")?;
+    world.alice_hears_sent(&third)?;
+    world.alice_hears_receipt(ReceiptKind::Delivery, &third)?;
+    let before = world.sends_to(&world.alice)?.len();
+    world
+        .bob
+        .core()
+        .mark_read(vec![last_message(&world.bob)?])?;
+    world.alice_hears_nothing_more()?;
+    assert_eq!(world.sends_to(&world.alice)?.len(), before);
+    Ok(())
+}
+
+#[test]
+fn digitacao_chega_na_hora_e_nao_fica_gravada() -> TestResult {
+    let world = World::new()?;
+    // A primeira mensagem de Alice abre a sessão do lado de Bob; só então ele avisa que digita.
+    let id = world.alice_posts(b"oi, bob")?;
+    world.bob_receives(b"oi, bob")?;
+    world.alice_hears_sent(&id)?;
+    world.alice_hears_receipt(ReceiptKind::Delivery, &id)?;
+
+    for started in [true, false] {
+        world
+            .bob
+            .core()
+            .send_typing(world.alice.address.clone(), started)?;
+        let event = world.alice_event_where(|event| matches!(event, ChatEvent::Typing { .. }))?;
+        match event {
+            ChatEvent::Typing {
+                from,
+                started: heard,
+                ..
+            } => {
+                assert_eq!(from, world.bob.address);
+                assert_eq!(heard, started);
+            }
+            other => return Err(format!("esperava digitação, veio {other:?}").into()),
+        }
+    }
+    assert!(world.alice.core().received_messages(0, 10)?.is_empty());
+    assert_eq!(world.alice.core().received_receipts(0, 10)?.len(), 1);
+
+    // No fio vai como MESSAGE, uma vez só, e nada volta depois.
+    let types: Vec<i32> = world
+        .sends_to(&world.alice)?
+        .iter()
+        .map(|send| send.envelope_type)
+        .collect();
+    assert_eq!(
+        types,
+        [ENVELOPE_RECEIPT, ENVELOPE_MESSAGE, ENVELOPE_MESSAGE]
+    );
+    world.server.wait_acked(4)?;
+    world.alice_hears_nothing_more()?;
+
+    // Sem sessão, não há como avisar.
+    let stranger = DeviceAddress {
+        aci: common::aci(0xC0),
+        device_id: 1,
+    };
+    assert_eq!(
+        world.alice.core().send_typing(stranger, true),
+        Err(CoreError::SessionNotFound)
+    );
     Ok(())
 }
 
@@ -661,6 +881,7 @@ mod fake {
         pub frame: Vec<u8>,
         pub destination_aci: [u8; 16],
         pub access_key: Vec<u8>,
+        pub envelope_type: i32,
         pub client_message_id: Vec<u8>,
         pub content: Vec<u8>,
     }
@@ -988,6 +1209,7 @@ mod fake {
             frame: frame.to_vec(),
             destination_aci,
             access_key: send.unidentified_access_key.clone(),
+            envelope_type: envelope.r#type,
             client_message_id: envelope.client_message_id.clone(),
             content: envelope.content.clone(),
         });

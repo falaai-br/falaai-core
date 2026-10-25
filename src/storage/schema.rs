@@ -124,4 +124,35 @@ pub(super) const MIGRATIONS: &[&str] = &[
         ADD COLUMN identity_changed INTEGER NOT NULL DEFAULT 0
         CHECK (identity_changed IN (0, 1));
     ",
+    // 7: mensagens de protocolo (recibos e digitação) e a opção de recibo de leitura.
+    //
+    // `outbox.kind`: 0 texto (o corpo é o texto, como antes), 1 recibo (o corpo é o conteúdo
+    // E2EE já serializado). Digitação nunca entra na outbox nem em tabela nenhuma.
+    //
+    // `received_receipts`: recibos recebidos, gravados na transação que avança o ratchet, como
+    // as mensagens; `message_ids` são os `client_message_id` (16 bytes cada, concatenados) das
+    // mensagens deste aparelho que o remetente confirma. Deduplicados pelo `client_message_id`
+    // do envelope, como as mensagens.
+    //
+    // `settings`: uma linha; sem ela, valem os padrões (recibo de leitura ligado).
+    "
+    ALTER TABLE outbox ADD COLUMN kind INTEGER NOT NULL DEFAULT 0 CHECK (kind IN (0, 1));
+
+    CREATE TABLE received_receipts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        sender_aci TEXT NOT NULL,
+        sender_device_id INTEGER NOT NULL,
+        client_message_id BLOB,
+        kind INTEGER NOT NULL CHECK (kind IN (1, 2)),
+        message_ids BLOB NOT NULL CHECK (length(message_ids) > 0 AND length(message_ids) % 16 = 0),
+        server_timestamp INTEGER NOT NULL
+    ) STRICT;
+    CREATE UNIQUE INDEX received_receipts_client_message_id
+        ON received_receipts (sender_aci, sender_device_id, client_message_id);
+
+    CREATE TABLE settings (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        read_receipts INTEGER NOT NULL CHECK (read_receipts IN (0, 1))
+    ) STRICT;
+    ",
 ];

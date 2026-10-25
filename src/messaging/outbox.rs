@@ -11,6 +11,11 @@
 //! [`Courier`] na hora e zeram o backoff. Recusa definitiva (destinatário inexistente, sem
 //! sessão) não volta para a fila. Aceita ou recusada, a mensagem só sai do banco depois que o
 //! evento chega ao app; sem assinante, o evento vai quando houver um.
+//!
+//! Pela mesma fila saem os recibos de entrega e de leitura ([`OutboxKind::Receipt`]), que
+//! precisam da mesma garantia de entrega que o texto, mas sem evento: o app não pediu cada um
+//! deles, e um recibo recusado de vez some sem aviso. O indicador de digitação não passa por
+//! aqui: é efêmero e vai direto pelo transporte, ou não vai.
 
 use std::io;
 use std::sync::Arc;
@@ -21,6 +26,7 @@ use std::time::{Duration, Instant};
 use rusqlite::types::Type;
 use rusqlite::{OptionalExtension, params};
 
+use super::content::Content;
 use super::corrupt;
 use crate::protocol::{Address, Plaintext};
 use crate::storage::{Database, StorageError};
@@ -30,6 +36,13 @@ pub(crate) const CLIENT_MESSAGE_ID_LEN: usize = 16;
 
 /// Id que o remetente dá a uma mensagem, o mesmo em todo reenvio.
 pub(crate) type ClientMessageId = [u8; CLIENT_MESSAGE_ID_LEN];
+
+/// Um `client_message_id` novo: UUID v4.
+pub(crate) fn fresh_client_message_id() -> ClientMessageId {
+    uuid::Builder::from_random_bytes(rand::random())
+        .into_uuid()
+        .into_bytes()
+}
 
 /// Espera entre tentativas: começa em `min` e dobra a cada falha seguida, até `max`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -44,12 +57,50 @@ pub(crate) const BACKOFF: Backoff = Backoff {
     max: Duration::from_secs(5 * 60),
 };
 
+/// O que uma linha da fila carrega em `body`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum OutboxKind {
+    /// Texto de conversa: `body` é o texto, embrulhado em [`Content::Text`] na hora de cifrar.
+    Text,
+    /// Recibo de entrega ou de leitura: `body` é o [`Content`] já serializado.
+    Receipt,
+}
+
+impl OutboxKind {
+    /// Código gravado em `outbox.kind`. Publicado, um código nunca muda de sentido.
+    fn code(self) -> i64 {
+        match self {
+            Self::Text => 0,
+            Self::Receipt => 1,
+        }
+    }
+
+    fn from_code(code: i64) -> Option<Self> {
+        match code {
+            0 => Some(Self::Text),
+            1 => Some(Self::Receipt),
+            _ => None,
+        }
+    }
+}
+
 /// Mensagem na fila. Sem `Debug`: o texto claro não pode ir para log.
 pub(crate) struct Pending {
     id: i64,
     pub(crate) client_message_id: ClientMessageId,
     pub(crate) to: Address,
+    pub(crate) kind: OutboxKind,
     pub(crate) body: Plaintext,
+}
+
+impl Pending {
+    /// O conteúdo E2EE a cifrar nesta tentativa.
+    pub(crate) fn plaintext(&self) -> Plaintext {
+        match self.kind {
+            OutboxKind::Text => Content::Text(self.body.clone()).encode(),
+            OutboxKind::Receipt => self.body.clone(),
+        }
+    }
 }
 
 /// Resultado final de uma mensagem da fila.
@@ -103,6 +154,7 @@ impl Outcome {
 pub(crate) struct Settled {
     id: i64,
     pub(crate) client_message_id: ClientMessageId,
+    pub(crate) kind: OutboxKind,
     pub(crate) outcome: Outcome,
 }
 
@@ -118,16 +170,28 @@ impl Outbox {
         Self { db }
     }
 
-    /// Põe `body` na fila para `to`, com um `client_message_id` novo (UUID v4), e devolve o id.
-    pub(crate) fn push(&self, to: &Address, body: &[u8]) -> Result<ClientMessageId, StorageError> {
-        let client_message_id = uuid::Builder::from_random_bytes(rand::random())
-            .into_uuid()
-            .into_bytes();
+    /// Põe `body`, do tipo `kind`, na fila para `to`, com um `client_message_id` novo (UUID
+    /// v4), e devolve o id. Dentro da transação de [`Database::begin`], só vale se ela for
+    /// confirmada.
+    pub(crate) fn push(
+        &self,
+        to: &Address,
+        kind: OutboxKind,
+        body: &[u8],
+    ) -> Result<ClientMessageId, StorageError> {
+        let client_message_id = fresh_client_message_id();
         self.db.with(|c| {
             c.execute(
-                "INSERT INTO outbox (client_message_id, recipient_aci, recipient_device_id, body)
-                 VALUES (?1, ?2, ?3, ?4)",
-                params![client_message_id, to.aci(), to.device_id(), body],
+                "INSERT INTO outbox
+                     (client_message_id, recipient_aci, recipient_device_id, kind, body)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    client_message_id,
+                    to.aci(),
+                    to.device_id(),
+                    kind.code(),
+                    body
+                ],
             )
         })?;
         Ok(client_message_id)
@@ -137,7 +201,7 @@ impl Outbox {
     pub(crate) fn next(&self) -> Result<Option<Pending>, StorageError> {
         self.db.with(|c| {
             c.query_row(
-                "SELECT id, client_message_id, recipient_aci, recipient_device_id, body
+                "SELECT id, client_message_id, recipient_aci, recipient_device_id, kind, body
                  FROM outbox WHERE outcome IS NULL ORDER BY id LIMIT 1",
                 [],
                 |row| {
@@ -146,7 +210,9 @@ impl Outbox {
                         id: row.get(0)?,
                         client_message_id: row.get(1)?,
                         to: Address::new(&aci, row.get(3)?).map_err(|_| corrupt(2, Type::Text))?,
-                        body: Plaintext::new(row.get(4)?),
+                        kind: OutboxKind::from_code(row.get(4)?)
+                            .ok_or_else(|| corrupt(4, Type::Integer))?,
+                        body: Plaintext::new(row.get(5)?),
                     })
                 },
             )
@@ -169,15 +235,17 @@ impl Outbox {
     pub(crate) fn settled(&self) -> Result<Vec<Settled>, StorageError> {
         self.db.with(|c| {
             let mut select = c.prepare_cached(
-                "SELECT id, client_message_id, outcome FROM outbox
+                "SELECT id, client_message_id, kind, outcome FROM outbox
                  WHERE outcome IS NOT NULL ORDER BY id",
             )?;
             let rows = select.query_map([], |row| {
                 Ok(Settled {
                     id: row.get(0)?,
                     client_message_id: row.get(1)?,
-                    outcome: Outcome::from_code(row.get(2)?)
+                    kind: OutboxKind::from_code(row.get(2)?)
                         .ok_or_else(|| corrupt(2, Type::Integer))?,
+                    outcome: Outcome::from_code(row.get(3)?)
+                        .ok_or_else(|| corrupt(3, Type::Integer))?,
                 })
             })?;
             rows.collect()
@@ -357,7 +425,7 @@ impl Dispatch {
 
     fn try_flush(&mut self) -> Result<Backlog, StorageError> {
         for settled in self.outbox.settled()? {
-            if !(self.notify)(&settled.client_message_id, settled.outcome) {
+            if !self.done(settled.kind, &settled.client_message_id, settled.outcome) {
                 break;
             }
             self.outbox.remove(settled.id)?;
@@ -367,13 +435,22 @@ impl Dispatch {
                 Attempt::Retry => return Ok(Backlog::Stuck),
                 Attempt::Done(outcome) => {
                     self.outbox.settle(pending.id, outcome)?;
-                    if (self.notify)(&pending.client_message_id, outcome) {
+                    if self.done(pending.kind, &pending.client_message_id, outcome) {
                         self.outbox.remove(pending.id)?;
                     }
                 }
             }
         }
         Ok(Backlog::Empty)
+    }
+
+    /// Dá o resultado por encerrado: texto, quando o evento chega ao app; recibo, sempre, sem
+    /// evento.
+    fn done(&mut self, kind: OutboxKind, id: &ClientMessageId, outcome: Outcome) -> bool {
+        match kind {
+            OutboxKind::Text => (self.notify)(id, outcome),
+            OutboxKind::Receipt => true,
+        }
     }
 }
 
@@ -419,13 +496,14 @@ mod tests {
     fn fila_entrega_na_ordem_de_gravacao() -> TestResult {
         let outbox = outbox()?;
         let to = peer()?;
-        let first = outbox.push(&to, b"um")?;
-        let second = outbox.push(&to, b"dois")?;
+        let first = outbox.push(&to, OutboxKind::Text, b"um")?;
+        let second = outbox.push(&to, OutboxKind::Text, b"dois")?;
         assert_ne!(first, second);
 
         let next = outbox.next()?.ok_or("fila vazia")?;
         assert_eq!(next.client_message_id, first);
         assert_eq!(next.to, to);
+        assert_eq!(next.kind, OutboxKind::Text);
         assert_eq!(next.body.as_slice(), b"um");
 
         outbox.settle(next.id, Outcome::Sent)?;
@@ -438,7 +516,7 @@ mod tests {
 
     #[test]
     fn client_message_id_e_um_uuid_v4() -> TestResult {
-        let id = outbox()?.push(&peer()?, b"oi")?;
+        let id = outbox()?.push(&peer()?, OutboxKind::Text, b"oi")?;
         let uuid = uuid::Uuid::from_bytes(id);
         assert_eq!(uuid.get_version(), Some(uuid::Version::Random));
         assert_eq!(uuid.get_variant(), uuid::Variant::RFC4122);
@@ -446,11 +524,43 @@ mod tests {
     }
 
     #[test]
+    fn texto_e_recibo_saem_com_o_conteudo_que_sera_cifrado() -> TestResult {
+        use super::super::content::ReceiptType;
+
+        let outbox = outbox()?;
+        let to = peer()?;
+        let receipt = Content::Receipt {
+            kind: ReceiptType::Delivery,
+            client_message_ids: vec![[9; 16]],
+        };
+        outbox.push(&to, OutboxKind::Text, b"oi")?;
+        let next = outbox.next()?.ok_or("fila vazia")?;
+        assert!(
+            Content::decode(&next.plaintext())? == Content::Text(Plaintext::new(b"oi".to_vec()))
+        );
+        outbox.settle(next.id, Outcome::Sent)?;
+
+        outbox.push(&to, OutboxKind::Receipt, &receipt.encode())?;
+        let next = outbox.next()?.ok_or("fila vazia")?;
+        assert_eq!(next.kind, OutboxKind::Receipt);
+        assert!(Content::decode(&next.plaintext())? == receipt);
+        Ok(())
+    }
+
+    #[test]
+    fn codigos_de_tipo_vao_e_voltam() {
+        for kind in [OutboxKind::Text, OutboxKind::Receipt] {
+            assert_eq!(OutboxKind::from_code(kind.code()), Some(kind));
+        }
+        assert_eq!(OutboxKind::from_code(2), None);
+    }
+
+    #[test]
     fn resultado_apaga_o_corpo_e_espera_o_evento() -> TestResult {
         let outbox = outbox()?;
         let to = peer()?;
-        let sent = outbox.push(&to, b"segredo")?;
-        let rejected = outbox.push(&to, b"outro")?;
+        let sent = outbox.push(&to, OutboxKind::Text, b"segredo")?;
+        let rejected = outbox.push(&to, OutboxKind::Text, b"outro")?;
         for _ in 0..2 {
             let next = outbox.next()?.ok_or("fila vazia")?;
             let outcome = if next.client_message_id == sent {
@@ -471,11 +581,15 @@ mod tests {
         assert_eq!(
             settled
                 .iter()
-                .map(|s| (s.client_message_id, s.outcome))
+                .map(|s| (s.client_message_id, s.kind, s.outcome))
                 .collect::<Vec<_>>(),
             [
-                (sent, Outcome::Sent),
-                (rejected, Outcome::Rejected(Rejection::UnknownDestination))
+                (sent, OutboxKind::Text, Outcome::Sent),
+                (
+                    rejected,
+                    OutboxKind::Text,
+                    Outcome::Rejected(Rejection::UnknownDestination)
+                )
             ]
         );
         for settled in settled {
@@ -559,7 +673,15 @@ mod tests {
         }
 
         fn push(&self, body: &[u8]) -> Result<ClientMessageId, Box<dyn std::error::Error>> {
-            let id = self.outbox.push(&peer()?, body)?;
+            self.push_kind(OutboxKind::Text, body)
+        }
+
+        fn push_kind(
+            &self,
+            kind: OutboxKind,
+            body: &[u8],
+        ) -> Result<ClientMessageId, Box<dyn std::error::Error>> {
+            let id = self.outbox.push(&peer()?, kind, body)?;
             self.courier.wake().pushed();
             Ok(id)
         }
@@ -679,6 +801,34 @@ mod tests {
     }
 
     #[test]
+    fn recibo_sai_da_fila_sem_avisar_o_app_mesmo_sem_assinante_ou_recusado() -> TestResult {
+        let rejected = Outcome::Rejected(Rejection::SessionNotFound);
+        let harness = Harness::start(FAST, vec![Attempt::Done(rejected)])?;
+        harness.listening.store(false, Ordering::SeqCst);
+        let refused = harness.push_kind(OutboxKind::Receipt, b"recibo")?;
+        let accepted = harness.push_kind(OutboxKind::Receipt, b"recibo")?;
+        let text = harness.push(b"texto")?;
+        let only_text_settled = [(text.to_vec(), Vec::new(), Some(0))];
+        let deadline = Instant::now() + WAIT;
+        while rows(&harness.outbox)? != only_text_settled {
+            if Instant::now() > deadline {
+                return Err(format!("{} linhas", rows(&harness.outbox)?.len()).into());
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+        // Os recibos foram tentados e sumiram; o texto espera o assinante.
+        let attempted: Vec<ClientMessageId> = harness.attempts().iter().map(|a| a.0).collect();
+        assert_eq!(attempted, [refused, accepted, text]);
+        assert!(lock(&harness.log).notified.is_empty());
+
+        harness.listening.store(true, Ordering::SeqCst);
+        harness.courier.wake().retry();
+        assert_eq!(harness.wait_notified(1)?, [(text, Outcome::Sent)]);
+        assert!(rows(&harness.outbox)?.is_empty());
+        Ok(())
+    }
+
+    #[test]
     fn sem_assinante_o_resultado_fica_ate_alguem_ouvir() -> TestResult {
         let harness = Harness::start(FAST, Vec::new())?;
         harness.listening.store(false, Ordering::SeqCst);
@@ -708,7 +858,7 @@ mod tests {
     #[test]
     fn fila_gravada_antes_do_courier_sai_quando_ele_sobe() -> TestResult {
         let outbox = outbox()?;
-        let id = outbox.push(&peer()?, b"offline")?;
+        let id = outbox.push(&peer()?, OutboxKind::Text, b"offline")?;
         let notified = Arc::new(Mutex::new(Vec::new()));
         let notify: NotifyFn = {
             let notified = notified.clone();
@@ -743,7 +893,7 @@ mod tests {
         let wake = courier.wake().clone();
         drop(courier);
         thread::sleep(Duration::from_millis(50));
-        outbox.push(&peer()?, b"depois")?;
+        outbox.push(&peer()?, OutboxKind::Text, b"depois")?;
         wake.pushed();
         wake.retry();
         thread::sleep(Duration::from_millis(50));

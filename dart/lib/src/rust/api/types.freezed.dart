@@ -55,13 +55,15 @@ extension ChatEventPatterns on ChatEvent {
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeMap<TResult extends Object?>({TResult Function( ChatEvent_MessageReceived value)?  messageReceived,TResult Function( ChatEvent_MessageSent value)?  messageSent,TResult Function( ChatEvent_MessageFailed value)?  messageFailed,required TResult orElse(),}){
+@optionalTypeArgs TResult maybeMap<TResult extends Object?>({TResult Function( ChatEvent_MessageReceived value)?  messageReceived,TResult Function( ChatEvent_MessageSent value)?  messageSent,TResult Function( ChatEvent_MessageFailed value)?  messageFailed,TResult Function( ChatEvent_ReceiptReceived value)?  receiptReceived,TResult Function( ChatEvent_Typing value)?  typing,required TResult orElse(),}){
 final _that = this;
 switch (_that) {
 case ChatEvent_MessageReceived() when messageReceived != null:
 return messageReceived(_that);case ChatEvent_MessageSent() when messageSent != null:
 return messageSent(_that);case ChatEvent_MessageFailed() when messageFailed != null:
-return messageFailed(_that);case _:
+return messageFailed(_that);case ChatEvent_ReceiptReceived() when receiptReceived != null:
+return receiptReceived(_that);case ChatEvent_Typing() when typing != null:
+return typing(_that);case _:
   return orElse();
 
 }
@@ -79,13 +81,15 @@ return messageFailed(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult map<TResult extends Object?>({required TResult Function( ChatEvent_MessageReceived value)  messageReceived,required TResult Function( ChatEvent_MessageSent value)  messageSent,required TResult Function( ChatEvent_MessageFailed value)  messageFailed,}){
+@optionalTypeArgs TResult map<TResult extends Object?>({required TResult Function( ChatEvent_MessageReceived value)  messageReceived,required TResult Function( ChatEvent_MessageSent value)  messageSent,required TResult Function( ChatEvent_MessageFailed value)  messageFailed,required TResult Function( ChatEvent_ReceiptReceived value)  receiptReceived,required TResult Function( ChatEvent_Typing value)  typing,}){
 final _that = this;
 switch (_that) {
 case ChatEvent_MessageReceived():
 return messageReceived(_that);case ChatEvent_MessageSent():
 return messageSent(_that);case ChatEvent_MessageFailed():
-return messageFailed(_that);}
+return messageFailed(_that);case ChatEvent_ReceiptReceived():
+return receiptReceived(_that);case ChatEvent_Typing():
+return typing(_that);}
 }
 /// A variant of `map` that fallback to returning `null`.
 ///
@@ -99,13 +103,15 @@ return messageFailed(_that);}
 /// }
 /// ```
 
-@optionalTypeArgs TResult? mapOrNull<TResult extends Object?>({TResult? Function( ChatEvent_MessageReceived value)?  messageReceived,TResult? Function( ChatEvent_MessageSent value)?  messageSent,TResult? Function( ChatEvent_MessageFailed value)?  messageFailed,}){
+@optionalTypeArgs TResult? mapOrNull<TResult extends Object?>({TResult? Function( ChatEvent_MessageReceived value)?  messageReceived,TResult? Function( ChatEvent_MessageSent value)?  messageSent,TResult? Function( ChatEvent_MessageFailed value)?  messageFailed,TResult? Function( ChatEvent_ReceiptReceived value)?  receiptReceived,TResult? Function( ChatEvent_Typing value)?  typing,}){
 final _that = this;
 switch (_that) {
 case ChatEvent_MessageReceived() when messageReceived != null:
 return messageReceived(_that);case ChatEvent_MessageSent() when messageSent != null:
 return messageSent(_that);case ChatEvent_MessageFailed() when messageFailed != null:
-return messageFailed(_that);case _:
+return messageFailed(_that);case ChatEvent_ReceiptReceived() when receiptReceived != null:
+return receiptReceived(_that);case ChatEvent_Typing() when typing != null:
+return typing(_that);case _:
   return null;
 
 }
@@ -122,12 +128,14 @@ return messageFailed(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeWhen<TResult extends Object?>({TResult Function( PlatformInt64 id,  DeviceAddress from,  Uint8List body,  bool identityChanged)?  messageReceived,TResult Function( Uint8List clientMessageId)?  messageSent,TResult Function( Uint8List clientMessageId,  CoreError error)?  messageFailed,required TResult orElse(),}) {final _that = this;
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>({TResult Function( PlatformInt64 id,  DeviceAddress from,  Uint8List body,  bool identityChanged)?  messageReceived,TResult Function( Uint8List clientMessageId)?  messageSent,TResult Function( Uint8List clientMessageId,  CoreError error)?  messageFailed,TResult Function( PlatformInt64 id,  DeviceAddress from,  ReceiptKind kind,  List<Uint8List> clientMessageIds,  BigInt serverTimestamp)?  receiptReceived,TResult Function( DeviceAddress from,  bool started,  BigInt serverTimestamp)?  typing,required TResult orElse(),}) {final _that = this;
 switch (_that) {
 case ChatEvent_MessageReceived() when messageReceived != null:
 return messageReceived(_that.id,_that.from,_that.body,_that.identityChanged);case ChatEvent_MessageSent() when messageSent != null:
 return messageSent(_that.clientMessageId);case ChatEvent_MessageFailed() when messageFailed != null:
-return messageFailed(_that.clientMessageId,_that.error);case _:
+return messageFailed(_that.clientMessageId,_that.error);case ChatEvent_ReceiptReceived() when receiptReceived != null:
+return receiptReceived(_that.id,_that.from,_that.kind,_that.clientMessageIds,_that.serverTimestamp);case ChatEvent_Typing() when typing != null:
+return typing(_that.from,_that.started,_that.serverTimestamp);case _:
   return orElse();
 
 }
@@ -145,12 +153,14 @@ return messageFailed(_that.clientMessageId,_that.error);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult when<TResult extends Object?>({required TResult Function( PlatformInt64 id,  DeviceAddress from,  Uint8List body,  bool identityChanged)  messageReceived,required TResult Function( Uint8List clientMessageId)  messageSent,required TResult Function( Uint8List clientMessageId,  CoreError error)  messageFailed,}) {final _that = this;
+@optionalTypeArgs TResult when<TResult extends Object?>({required TResult Function( PlatformInt64 id,  DeviceAddress from,  Uint8List body,  bool identityChanged)  messageReceived,required TResult Function( Uint8List clientMessageId)  messageSent,required TResult Function( Uint8List clientMessageId,  CoreError error)  messageFailed,required TResult Function( PlatformInt64 id,  DeviceAddress from,  ReceiptKind kind,  List<Uint8List> clientMessageIds,  BigInt serverTimestamp)  receiptReceived,required TResult Function( DeviceAddress from,  bool started,  BigInt serverTimestamp)  typing,}) {final _that = this;
 switch (_that) {
 case ChatEvent_MessageReceived():
 return messageReceived(_that.id,_that.from,_that.body,_that.identityChanged);case ChatEvent_MessageSent():
 return messageSent(_that.clientMessageId);case ChatEvent_MessageFailed():
-return messageFailed(_that.clientMessageId,_that.error);}
+return messageFailed(_that.clientMessageId,_that.error);case ChatEvent_ReceiptReceived():
+return receiptReceived(_that.id,_that.from,_that.kind,_that.clientMessageIds,_that.serverTimestamp);case ChatEvent_Typing():
+return typing(_that.from,_that.started,_that.serverTimestamp);}
 }
 /// A variant of `when` that fallback to returning `null`
 ///
@@ -164,12 +174,14 @@ return messageFailed(_that.clientMessageId,_that.error);}
 /// }
 /// ```
 
-@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>({TResult? Function( PlatformInt64 id,  DeviceAddress from,  Uint8List body,  bool identityChanged)?  messageReceived,TResult? Function( Uint8List clientMessageId)?  messageSent,TResult? Function( Uint8List clientMessageId,  CoreError error)?  messageFailed,}) {final _that = this;
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>({TResult? Function( PlatformInt64 id,  DeviceAddress from,  Uint8List body,  bool identityChanged)?  messageReceived,TResult? Function( Uint8List clientMessageId)?  messageSent,TResult? Function( Uint8List clientMessageId,  CoreError error)?  messageFailed,TResult? Function( PlatformInt64 id,  DeviceAddress from,  ReceiptKind kind,  List<Uint8List> clientMessageIds,  BigInt serverTimestamp)?  receiptReceived,TResult? Function( DeviceAddress from,  bool started,  BigInt serverTimestamp)?  typing,}) {final _that = this;
 switch (_that) {
 case ChatEvent_MessageReceived() when messageReceived != null:
 return messageReceived(_that.id,_that.from,_that.body,_that.identityChanged);case ChatEvent_MessageSent() when messageSent != null:
 return messageSent(_that.clientMessageId);case ChatEvent_MessageFailed() when messageFailed != null:
-return messageFailed(_that.clientMessageId,_that.error);case _:
+return messageFailed(_that.clientMessageId,_that.error);case ChatEvent_ReceiptReceived() when receiptReceived != null:
+return receiptReceived(_that.id,_that.from,_that.kind,_that.clientMessageIds,_that.serverTimestamp);case ChatEvent_Typing() when typing != null:
+return typing(_that.from,_that.started,_that.serverTimestamp);case _:
   return null;
 
 }
@@ -388,6 +400,167 @@ class _$ChatEvent_MessageFailedCopyWithImpl<$Res>
 clientMessageId: null == clientMessageId ? _self.clientMessageId : clientMessageId // ignore: cast_nullable_to_non_nullable
 as Uint8List,error: null == error ? _self.error : error // ignore: cast_nullable_to_non_nullable
 as CoreError,
+  ));
+}
+
+
+}
+
+/// @nodoc
+
+
+class ChatEvent_ReceiptReceived extends ChatEvent {
+  const ChatEvent_ReceiptReceived({required this.id, required this.from, required this.kind, required final  List<Uint8List> clientMessageIds, required this.serverTimestamp}): _clientMessageIds = clientMessageIds,super._();
+  
+
+/// Id do recibo no banco, o mesmo de [`ReceivedReceipt::id`].
+ final  PlatformInt64 id;
+/// Dispositivo que confirma, conforme o certificado de remetente.
+ final  DeviceAddress from;
+/// Entrega ou leitura.
+ final  ReceiptKind kind;
+/// Os ids que [`super::FalaaiCore::send_message`] devolveu para as mensagens
+/// confirmadas.
+ final  List<Uint8List> _clientMessageIds;
+/// Os ids que [`super::FalaaiCore::send_message`] devolveu para as mensagens
+/// confirmadas.
+ List<Uint8List> get clientMessageIds {
+  if (_clientMessageIds is EqualUnmodifiableListView) return _clientMessageIds;
+  // ignore: implicit_dynamic_type
+  return EqualUnmodifiableListView(_clientMessageIds);
+}
+
+/// Instante em que o servidor recebeu o recibo, em milissegundos desde a época Unix.
+ final  BigInt serverTimestamp;
+
+/// Create a copy of ChatEvent
+/// with the given fields replaced by the non-null parameter values.
+@JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+$ChatEvent_ReceiptReceivedCopyWith<ChatEvent_ReceiptReceived> get copyWith => _$ChatEvent_ReceiptReceivedCopyWithImpl<ChatEvent_ReceiptReceived>(this, _$identity);
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is ChatEvent_ReceiptReceived&&(identical(other.id, id) || other.id == id)&&(identical(other.from, from) || other.from == from)&&(identical(other.kind, kind) || other.kind == kind)&&const DeepCollectionEquality().equals(other._clientMessageIds, _clientMessageIds)&&(identical(other.serverTimestamp, serverTimestamp) || other.serverTimestamp == serverTimestamp));
+}
+
+
+@override
+int get hashCode => Object.hash(runtimeType,id,from,kind,const DeepCollectionEquality().hash(_clientMessageIds),serverTimestamp);
+
+@override
+String toString() {
+  return 'ChatEvent.receiptReceived(id: $id, from: $from, kind: $kind, clientMessageIds: $clientMessageIds, serverTimestamp: $serverTimestamp)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class $ChatEvent_ReceiptReceivedCopyWith<$Res> implements $ChatEventCopyWith<$Res> {
+  factory $ChatEvent_ReceiptReceivedCopyWith(ChatEvent_ReceiptReceived value, $Res Function(ChatEvent_ReceiptReceived) _then) = _$ChatEvent_ReceiptReceivedCopyWithImpl;
+@useResult
+$Res call({
+ PlatformInt64 id, DeviceAddress from, ReceiptKind kind, List<Uint8List> clientMessageIds, BigInt serverTimestamp
+});
+
+
+
+
+}
+/// @nodoc
+class _$ChatEvent_ReceiptReceivedCopyWithImpl<$Res>
+    implements $ChatEvent_ReceiptReceivedCopyWith<$Res> {
+  _$ChatEvent_ReceiptReceivedCopyWithImpl(this._self, this._then);
+
+  final ChatEvent_ReceiptReceived _self;
+  final $Res Function(ChatEvent_ReceiptReceived) _then;
+
+/// Create a copy of ChatEvent
+/// with the given fields replaced by the non-null parameter values.
+@pragma('vm:prefer-inline') $Res call({Object? id = null,Object? from = null,Object? kind = null,Object? clientMessageIds = null,Object? serverTimestamp = null,}) {
+  return _then(ChatEvent_ReceiptReceived(
+id: null == id ? _self.id : id // ignore: cast_nullable_to_non_nullable
+as PlatformInt64,from: null == from ? _self.from : from // ignore: cast_nullable_to_non_nullable
+as DeviceAddress,kind: null == kind ? _self.kind : kind // ignore: cast_nullable_to_non_nullable
+as ReceiptKind,clientMessageIds: null == clientMessageIds ? _self._clientMessageIds : clientMessageIds // ignore: cast_nullable_to_non_nullable
+as List<Uint8List>,serverTimestamp: null == serverTimestamp ? _self.serverTimestamp : serverTimestamp // ignore: cast_nullable_to_non_nullable
+as BigInt,
+  ));
+}
+
+
+}
+
+/// @nodoc
+
+
+class ChatEvent_Typing extends ChatEvent {
+  const ChatEvent_Typing({required this.from, required this.started, required this.serverTimestamp}): super._();
+  
+
+/// Dispositivo que digita, conforme o certificado de remetente.
+ final  DeviceAddress from;
+/// `true` começou, `false` parou.
+ final  bool started;
+/// Instante em que o servidor recebeu o aviso, em milissegundos desde a época Unix.
+ final  BigInt serverTimestamp;
+
+/// Create a copy of ChatEvent
+/// with the given fields replaced by the non-null parameter values.
+@JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+$ChatEvent_TypingCopyWith<ChatEvent_Typing> get copyWith => _$ChatEvent_TypingCopyWithImpl<ChatEvent_Typing>(this, _$identity);
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is ChatEvent_Typing&&(identical(other.from, from) || other.from == from)&&(identical(other.started, started) || other.started == started)&&(identical(other.serverTimestamp, serverTimestamp) || other.serverTimestamp == serverTimestamp));
+}
+
+
+@override
+int get hashCode => Object.hash(runtimeType,from,started,serverTimestamp);
+
+@override
+String toString() {
+  return 'ChatEvent.typing(from: $from, started: $started, serverTimestamp: $serverTimestamp)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class $ChatEvent_TypingCopyWith<$Res> implements $ChatEventCopyWith<$Res> {
+  factory $ChatEvent_TypingCopyWith(ChatEvent_Typing value, $Res Function(ChatEvent_Typing) _then) = _$ChatEvent_TypingCopyWithImpl;
+@useResult
+$Res call({
+ DeviceAddress from, bool started, BigInt serverTimestamp
+});
+
+
+
+
+}
+/// @nodoc
+class _$ChatEvent_TypingCopyWithImpl<$Res>
+    implements $ChatEvent_TypingCopyWith<$Res> {
+  _$ChatEvent_TypingCopyWithImpl(this._self, this._then);
+
+  final ChatEvent_Typing _self;
+  final $Res Function(ChatEvent_Typing) _then;
+
+/// Create a copy of ChatEvent
+/// with the given fields replaced by the non-null parameter values.
+@pragma('vm:prefer-inline') $Res call({Object? from = null,Object? started = null,Object? serverTimestamp = null,}) {
+  return _then(ChatEvent_Typing(
+from: null == from ? _self.from : from // ignore: cast_nullable_to_non_nullable
+as DeviceAddress,started: null == started ? _self.started : started // ignore: cast_nullable_to_non_nullable
+as bool,serverTimestamp: null == serverTimestamp ? _self.serverTimestamp : serverTimestamp // ignore: cast_nullable_to_non_nullable
+as BigInt,
   ));
 }
 

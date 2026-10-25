@@ -10,7 +10,7 @@ import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
 part 'types.freezed.dart';
 
 // These functions are ignored because they are not marked as `pub`: `to_protocol`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `try_from`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `try_from`
 
 /// Parte pública das chaves da conta, para enviar ao servidor no registro.
 class AccountKeys {
@@ -102,6 +102,41 @@ sealed class ChatEvent with _$ChatEvent {
     /// [`CoreError::UnknownDestination`] ou [`CoreError::InvalidEnvelope`].
     required CoreError error,
   }) = ChatEvent_MessageFailed;
+
+  /// Um contato confirmou que mensagens deste aparelho chegaram a ele ou foram lidas. Já
+  /// gravado no banco local; com recibos de leitura desligados, os de leitura que chegam são
+  /// descartados sem evento.
+  const factory ChatEvent.receiptReceived({
+    /// Id do recibo no banco, o mesmo de [`ReceivedReceipt::id`].
+    required PlatformInt64 id,
+
+    /// Dispositivo que confirma, conforme o certificado de remetente.
+    required DeviceAddress from,
+
+    /// Entrega ou leitura.
+    required ReceiptKind kind,
+
+    /// Os ids que [`super::FalaaiCore::send_message`] devolveu para as mensagens
+    /// confirmadas.
+    required List<Uint8List> clientMessageIds,
+
+    /// Instante em que o servidor recebeu o recibo, em milissegundos desde a época Unix.
+    required BigInt serverTimestamp,
+  }) = ChatEvent_ReceiptReceived;
+
+  /// Um contato começou ou parou de digitar. Efêmero: não fica no banco e não volta em
+  /// chamada nenhuma; o app apaga o indicador sozinho depois de alguns segundos e pode
+  /// descartar pelo `server_timestamp` um aviso que esperou na fila.
+  const factory ChatEvent.typing({
+    /// Dispositivo que digita, conforme o certificado de remetente.
+    required DeviceAddress from,
+
+    /// `true` começou, `false` parou.
+    required bool started,
+
+    /// Instante em que o servidor recebeu o aviso, em milissegundos desde a época Unix.
+    required BigInt serverTimestamp,
+  }) = ChatEvent_Typing;
 }
 
 /// Dispositivo de uma conta: ACI (UUID em texto) e device id (1 a 127).
@@ -232,6 +267,17 @@ class PreKeyBundle {
           kyberPreKey == other.kyberPreKey;
 }
 
+/// O que um recibo confirma.
+enum ReceiptKind {
+  /// A mensagem chegou ao aparelho do contato e foi decifrada. Enviado pelo núcleo de quem
+  /// recebe, sempre.
+  delivery,
+
+  /// O contato viu a mensagem. Enviado por [`super::FalaaiCore::mark_read`], só com a opção
+  /// ligada.
+  read,
+}
+
 /// Mensagem recebida, lida do banco local com [`super::FalaaiCore::received_messages`].
 class ReceivedMessage {
   /// Id da mensagem no banco. Cresce na ordem em que as mensagens foram gravadas, pelo app ou
@@ -277,6 +323,52 @@ class ReceivedMessage {
           serverTimestamp == other.serverTimestamp &&
           body == other.body &&
           identityChanged == other.identityChanged;
+}
+
+/// Recibo recebido, lido do banco local com [`super::FalaaiCore::received_receipts`].
+class ReceivedReceipt {
+  /// Id do recibo no banco. Cresce na ordem em que os recibos foram gravados, pelo app ou pela
+  /// extensão de notificação; serve de cursor, separado do das mensagens.
+  final PlatformInt64 id;
+
+  /// Dispositivo que confirma, conforme o certificado de remetente.
+  final DeviceAddress from;
+
+  /// Entrega ou leitura.
+  final ReceiptKind kind;
+
+  /// Os ids que [`super::FalaaiCore::send_message`] devolveu para as mensagens confirmadas.
+  final List<Uint8List> clientMessageIds;
+
+  /// Instante em que o servidor recebeu o recibo, em milissegundos desde a época Unix.
+  final BigInt serverTimestamp;
+
+  const ReceivedReceipt({
+    required this.id,
+    required this.from,
+    required this.kind,
+    required this.clientMessageIds,
+    required this.serverTimestamp,
+  });
+
+  @override
+  int get hashCode =>
+      id.hashCode ^
+      from.hashCode ^
+      kind.hashCode ^
+      clientMessageIds.hashCode ^
+      serverTimestamp.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ReceivedReceipt &&
+          runtimeType == other.runtimeType &&
+          id == other.id &&
+          from == other.from &&
+          kind == other.kind &&
+          clientMessageIds == other.clientMessageIds &&
+          serverTimestamp == other.serverTimestamp;
 }
 
 /// Código de segurança de uma conversa (safety number): o fingerprint da libsignal sobre as

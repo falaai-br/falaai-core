@@ -101,6 +101,9 @@ abstract class FalaaiCoreLibApiImplPlatform
   List<PreKey> dco_decode_list_pre_key(dynamic raw);
 
   @protected
+  Int64List dco_decode_list_prim_i_64_strict(dynamic raw);
+
+  @protected
   List<int> dco_decode_list_prim_u_8_loose(dynamic raw);
 
   @protected
@@ -108,6 +111,9 @@ abstract class FalaaiCoreLibApiImplPlatform
 
   @protected
   List<ReceivedMessage> dco_decode_list_received_message(dynamic raw);
+
+  @protected
+  List<ReceivedReceipt> dco_decode_list_received_receipt(dynamic raw);
 
   @protected
   List<SignedPreKey> dco_decode_list_signed_pre_key(dynamic raw);
@@ -122,7 +128,13 @@ abstract class FalaaiCoreLibApiImplPlatform
   PreKeyBundle dco_decode_pre_key_bundle(dynamic raw);
 
   @protected
+  ReceiptKind dco_decode_receipt_kind(dynamic raw);
+
+  @protected
   ReceivedMessage dco_decode_received_message(dynamic raw);
+
+  @protected
+  ReceivedReceipt dco_decode_received_receipt(dynamic raw);
 
   @protected
   SafetyNumber dco_decode_safety_number(dynamic raw);
@@ -234,6 +246,9 @@ abstract class FalaaiCoreLibApiImplPlatform
   List<PreKey> sse_decode_list_pre_key(SseDeserializer deserializer);
 
   @protected
+  Int64List sse_decode_list_prim_i_64_strict(SseDeserializer deserializer);
+
+  @protected
   List<int> sse_decode_list_prim_u_8_loose(SseDeserializer deserializer);
 
   @protected
@@ -241,6 +256,11 @@ abstract class FalaaiCoreLibApiImplPlatform
 
   @protected
   List<ReceivedMessage> sse_decode_list_received_message(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  List<ReceivedReceipt> sse_decode_list_received_receipt(
     SseDeserializer deserializer,
   );
 
@@ -259,7 +279,13 @@ abstract class FalaaiCoreLibApiImplPlatform
   PreKeyBundle sse_decode_pre_key_bundle(SseDeserializer deserializer);
 
   @protected
+  ReceiptKind sse_decode_receipt_kind(SseDeserializer deserializer);
+
+  @protected
   ReceivedMessage sse_decode_received_message(SseDeserializer deserializer);
+
+  @protected
+  ReceivedReceipt sse_decode_received_receipt(SseDeserializer deserializer);
 
   @protected
   SafetyNumber sse_decode_safety_number(SseDeserializer deserializer);
@@ -385,6 +411,12 @@ abstract class FalaaiCoreLibApiImplPlatform
   void sse_encode_list_pre_key(List<PreKey> self, SseSerializer serializer);
 
   @protected
+  void sse_encode_list_prim_i_64_strict(
+    Int64List self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_list_prim_u_8_loose(List<int> self, SseSerializer serializer);
 
   @protected
@@ -396,6 +428,12 @@ abstract class FalaaiCoreLibApiImplPlatform
   @protected
   void sse_encode_list_received_message(
     List<ReceivedMessage> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_received_receipt(
+    List<ReceivedReceipt> self,
     SseSerializer serializer,
   );
 
@@ -418,8 +456,17 @@ abstract class FalaaiCoreLibApiImplPlatform
   void sse_encode_pre_key_bundle(PreKeyBundle self, SseSerializer serializer);
 
   @protected
+  void sse_encode_receipt_kind(ReceiptKind self, SseSerializer serializer);
+
+  @protected
   void sse_encode_received_message(
     ReceivedMessage self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_received_receipt(
+    ReceivedReceipt self,
     SseSerializer serializer,
   );
 

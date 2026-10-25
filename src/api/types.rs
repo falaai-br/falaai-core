@@ -4,7 +4,8 @@
 use std::fmt;
 
 use super::error::CoreError;
-use crate::messaging::InboxMessage;
+use crate::messaging::content::ReceiptType;
+use crate::messaging::{InboxMessage, InboxReceipt};
 use crate::protocol::identity::SafetyCode;
 use crate::protocol::keys;
 use crate::protocol::store::PeerIdentityStatus;
@@ -241,6 +242,53 @@ pub enum ChatEvent {
         /// [`CoreError::UnknownDestination`] ou [`CoreError::InvalidEnvelope`].
         error: CoreError,
     },
+    /// Um contato confirmou que mensagens deste aparelho chegaram a ele ou foram lidas. Já
+    /// gravado no banco local; com recibos de leitura desligados, os de leitura que chegam são
+    /// descartados sem evento.
+    ReceiptReceived {
+        /// Id do recibo no banco, o mesmo de [`ReceivedReceipt::id`].
+        id: i64,
+        /// Dispositivo que confirma, conforme o certificado de remetente.
+        from: DeviceAddress,
+        /// Entrega ou leitura.
+        kind: ReceiptKind,
+        /// Os ids que [`super::FalaaiCore::send_message`] devolveu para as mensagens
+        /// confirmadas.
+        client_message_ids: Vec<Vec<u8>>,
+        /// Instante em que o servidor recebeu o recibo, em milissegundos desde a época Unix.
+        server_timestamp: u64,
+    },
+    /// Um contato começou ou parou de digitar. Efêmero: não fica no banco e não volta em
+    /// chamada nenhuma; o app apaga o indicador sozinho depois de alguns segundos e pode
+    /// descartar pelo `server_timestamp` um aviso que esperou na fila.
+    Typing {
+        /// Dispositivo que digita, conforme o certificado de remetente.
+        from: DeviceAddress,
+        /// `true` começou, `false` parou.
+        started: bool,
+        /// Instante em que o servidor recebeu o aviso, em milissegundos desde a época Unix.
+        server_timestamp: u64,
+    },
+}
+
+/// O que um recibo confirma.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReceiptKind {
+    /// A mensagem chegou ao aparelho do contato e foi decifrada. Enviado pelo núcleo de quem
+    /// recebe, sempre.
+    Delivery,
+    /// O contato viu a mensagem. Enviado por [`super::FalaaiCore::mark_read`], só com a opção
+    /// ligada.
+    Read,
+}
+
+impl From<ReceiptType> for ReceiptKind {
+    fn from(kind: ReceiptType) -> Self {
+        match kind {
+            ReceiptType::Delivery => Self::Delivery,
+            ReceiptType::Read => Self::Read,
+        }
+    }
 }
 
 impl fmt::Debug for ChatEvent {
@@ -263,6 +311,30 @@ impl fmt::Debug for ChatEvent {
                 .debug_struct("MessageFailed")
                 .field("error", error)
                 .finish_non_exhaustive(),
+            Self::ReceiptReceived {
+                id,
+                from,
+                kind,
+                client_message_ids,
+                server_timestamp,
+            } => f
+                .debug_struct("ReceiptReceived")
+                .field("id", id)
+                .field("from", from)
+                .field("kind", kind)
+                .field("messages", &client_message_ids.len())
+                .field("server_timestamp", server_timestamp)
+                .finish(),
+            Self::Typing {
+                from,
+                started,
+                server_timestamp,
+            } => f
+                .debug_struct("Typing")
+                .field("from", from)
+                .field("started", started)
+                .field("server_timestamp", server_timestamp)
+                .finish(),
         }
     }
 }
@@ -361,6 +433,50 @@ impl From<PeerIdentityStatus> for IdentityStatus {
             PeerIdentityStatus::Default => Self::Default,
             PeerIdentityStatus::Verified => Self::Verified,
             PeerIdentityStatus::Changed => Self::Changed,
+        }
+    }
+}
+
+/// Recibo recebido, lido do banco local com [`super::FalaaiCore::received_receipts`].
+#[derive(Clone, PartialEq, Eq)]
+pub struct ReceivedReceipt {
+    /// Id do recibo no banco. Cresce na ordem em que os recibos foram gravados, pelo app ou pela
+    /// extensão de notificação; serve de cursor, separado do das mensagens.
+    pub id: i64,
+    /// Dispositivo que confirma, conforme o certificado de remetente.
+    pub from: DeviceAddress,
+    /// Entrega ou leitura.
+    pub kind: ReceiptKind,
+    /// Os ids que [`super::FalaaiCore::send_message`] devolveu para as mensagens confirmadas.
+    pub client_message_ids: Vec<Vec<u8>>,
+    /// Instante em que o servidor recebeu o recibo, em milissegundos desde a época Unix.
+    pub server_timestamp: u64,
+}
+
+impl fmt::Debug for ReceivedReceipt {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ReceivedReceipt")
+            .field("id", &self.id)
+            .field("from", &self.from)
+            .field("kind", &self.kind)
+            .field("messages", &self.client_message_ids.len())
+            .field("server_timestamp", &self.server_timestamp)
+            .finish()
+    }
+}
+
+impl From<InboxReceipt> for ReceivedReceipt {
+    fn from(receipt: InboxReceipt) -> Self {
+        Self {
+            id: receipt.id,
+            from: DeviceAddress::from(&receipt.from),
+            kind: receipt.kind.into(),
+            client_message_ids: receipt
+                .client_message_ids
+                .iter()
+                .map(|id| id.to_vec())
+                .collect(),
+            server_timestamp: receipt.server_timestamp,
         }
     }
 }
